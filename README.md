@@ -4,8 +4,9 @@ An experimental browser-powered sandbox for frontend and full-stack JavaScript
 development. Projects run in the browser using a virtual filesystem, JavaScript
 processes, supported package installation, app previews and saved workspaces.
 
-The project is MIT licensed. Source publication and the npm alpha release are
-being prepared. No npm packages have been published yet.
+The [source is available on GitHub](https://github.com/TanStack/container) under
+the MIT license. The npm alpha release is being prepared. No npm packages have
+been published yet.
 
 ## What works
 

@@ -124,9 +124,11 @@ The older `hBp91J` correctly fails the new deployment-identity check. These are
 adoption results, not browser acceptance or source-bound release approval.
 See [the adoption record](reports/sdk-split-nTFTjj-adoption.md).
 
-No source or packages have been published. The public repository
-[github.com/TanStack/container](https://github.com/TanStack/container) has been
-created and verified empty, with admin access. Source publication remains open.
+The MIT experimental source is published at
+[github.com/TanStack/container](https://github.com/TanStack/container).
+The initial source commit is `8e0f57bd29978810811fa995df63e9b4d1d63539`.
+No npm packages have been published. Source publication does not approve the
+alpha or replace exact-package workflow verification.
 The latest outside-sandbox npm authentication check returned E401, so npm
 authentication is still required before publication.
 
