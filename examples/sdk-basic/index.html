@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SDK workspace example</title>
+<style>body{max-width:52rem;margin:2rem auto;padding:0 1rem;font:16px system-ui}textarea{display:block;box-sizing:border-box;width:100%;min-height:7rem;margin:.5rem 0}button{margin:.5rem .5rem .5rem 0;padding:.5rem}pre{white-space:pre-wrap}iframe{width:100%;min-height:12rem;border:1px solid #888}</style>
+<script type="importmap">{"imports":{"@tanstack/browser-sandbox-experimental":"/sdk/index.js"}}</script>
+</head><body><h1>SDK workspace example</h1>
+<p>Local experiment. Do not enter sensitive data. Save stores workspace files in this browser, not running processes.</p>
+<label for="source">/message.txt</label><textarea id="source">Hello from the browser workspace</textarea>
+<button id="run" disabled>Run and preview</button><button id="save" disabled>Save</button><button id="resume" disabled>Resume saved files</button><button id="reload">Reload host page</button>
+<pre id="output" role="status">Starting</pre><div id="preview"></div>
+<script type="module" src="/client.js"></script></body></html>

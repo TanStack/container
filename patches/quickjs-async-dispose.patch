@@ -1,0 +1,15 @@
+diff --git a/packages/quickjs-emscripten-core/src/module-asyncify.ts b/packages/quickjs-emscripten-core/src/module-asyncify.ts
+index e4d26cb..d851742 100644
+--- a/packages/quickjs-emscripten-core/src/module-asyncify.ts
++++ b/packages/quickjs-emscripten-core/src/module-asyncify.ts
+@@ -40,8 +40,9 @@ export class QuickJSAsyncWASMModule extends QuickJSWASMModule {
+    */
+   override newRuntime(options: AsyncRuntimeOptions = {}): QuickJSAsyncRuntime {
+     const rt = new Lifetime(this.ffi.QTS_NewRuntime(), undefined, (rt_ptr) => {
+-      this.callbacks.deleteRuntime(rt_ptr)
+       this.ffi.QTS_FreeRuntime(rt_ptr)
++      // FreeRuntime runs finalizers which still need the host callback map.
++      this.callbacks.deleteRuntime(rt_ptr)
+     })
+     const runtime = new QuickJSAsyncRuntime({
+       module: this.module,

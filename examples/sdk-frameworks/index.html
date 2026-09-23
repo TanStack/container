@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Browser framework workspace</title>
+<style>body{max-width:64rem;margin:2rem auto;padding:0 1rem;font:16px system-ui}textarea{box-sizing:border-box;width:100%;min-height:18rem;font:14px monospace}button,select{margin:.5rem .5rem .5rem 0;padding:.5rem}pre{white-space:pre-wrap;max-height:12rem;overflow:auto}iframe{width:100%;min-height:25rem;border:1px solid #888}</style>
+<script type="importmap">{"imports":{"@tanstack/browser-sandbox-experimental":"/sdk/index.js"}}</script>
+</head><body><h1>Browser framework workspace</h1>
+<p>Experimental compiler enabled. Do not enter sensitive data. Save keeps files and installed dependencies in this browser, not running processes.</p>
+<label for="project">Project</label><select id="project"><option value="vite">Vite frontend</option><option value="start">TanStack Start</option></select>
+<button id="open" disabled>Install and run fresh project</button><button id="resume" disabled>Resume saved project</button><button id="save" disabled>Save and stop</button><button id="stop" disabled>Stop app</button>
+<p><label id="path" for="source">Source</label></p><textarea id="source" spellcheck="false" disabled></textarea><button id="apply" disabled>Apply edit</button>
+<div><label for="script">Package script</label><select id="script" disabled></select><button id="refresh-scripts" disabled>Refresh scripts</button><button id="run-script" disabled>Run script</button></div>
+<p>Run script applies the edit first. Start's test needs the app running. Scripts stop after 30 seconds. No automatic pre or post scripts run.</p>
+<pre id="output" role="status">Loading example</pre><div id="preview"></div><script type="module" src="/client.js"></script></body></html>

@@ -1,0 +1,25 @@
+{
+  "scope": "Native reference fixture. Guest parity is tested separately.",
+  "node": "v24.15.0",
+  "assemblerSHA256": "ec365944cb1ebeb07f18140c66118c1b64fb49ca90d5a024ddb0dc82e35cbae8",
+  "sourceSHA256": "353580d941b7be9dcbb862afab234d5caea7e0bf991350609d348cb640e371ba",
+  "wasmSHA256": "0b3593be5384654a008cd4e95359ea3e923d99e29c22aa1513ee8a317eb7c9f6",
+  "bytes": 487,
+  "native": {
+    "direct": 30,
+    "indirect": 24,
+    "globals": [
+      31,
+      32
+    ],
+    "select": [
+      22,
+      12
+    ],
+    "branch": [
+      43,
+      33
+    ],
+    "locals": 444
+  }
+}

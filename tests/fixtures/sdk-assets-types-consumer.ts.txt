@@ -1,0 +1,24 @@
+import {copyPreviewHostAssets,copyRuntimeAssets,readPreviewHostHostingContract} from '@tanstack/browser-sandbox-experimental/assets'
+import type {PreviewHostHostingContract,PreviewHostRoute} from '@tanstack/browser-sandbox-experimental/assets'
+
+const path:string=copyRuntimeAssets('/tmp/my-app/public/runtime')
+path.toUpperCase()
+const copy:(destination:string)=>string=copyRuntimeAssets
+void copy
+const previewPath:string=copyPreviewHostAssets('/tmp/my-app/public/preview')
+previewPath.toUpperCase()
+const hosting:PreviewHostHostingContract=readPreviewHostHostingContract()
+const route:PreviewHostRoute=hosting.routes[0]!
+const method:'GET'=route.method
+const fallback:503=hosting.fallbackStatus
+void method;void fallback
+// @ts-expect-error destination is a path string, not a configuration object
+copyRuntimeAssets({destination:'/tmp/runtime'})
+// @ts-expect-error destination is required
+copyRuntimeAssets()
+// @ts-expect-error the copy helper is synchronous, not a promise
+const pending:Promise<string>=copyRuntimeAssets('/tmp/runtime')
+// @ts-expect-error preview destination is required
+copyPreviewHostAssets()
+// @ts-expect-error verified contract fields are immutable
+hosting.scope='/app/'

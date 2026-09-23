@@ -1,0 +1,168 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  color: #e8ebf2;
+  background: #0a0c10;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+main {
+  width: min(1080px, calc(100% - 32px));
+  margin: 32px auto;
+}
+
+header,
+form,
+.response-panel > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+header {
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+#status {
+  color: #aeb6c7;
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+#status[data-state='ready'] {
+  color: #63df9b;
+}
+
+#status[data-state='error'] {
+  color: #ff848f;
+}
+
+.workspace,
+.response-panel {
+  overflow: hidden;
+  border: 1px solid #242936;
+  border-radius: 10px;
+  background: #101319;
+}
+
+.editor-label,
+.response-panel > div {
+  display: block;
+  padding: 10px 14px;
+  border-bottom: 1px solid #242936;
+  color: #8993a8;
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+#source {
+  display: block;
+  width: 100%;
+  min-height: 430px;
+  resize: vertical;
+  border: 0;
+  outline: none;
+  padding: 18px;
+  color: #d9deea;
+  background: transparent;
+  font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace;
+  tab-size: 2;
+}
+
+form {
+  margin: 14px 0;
+}
+
+form label {
+  color: #8993a8;
+  font-size: 13px;
+}
+
+input,
+button {
+  height: 36px;
+  border: 1px solid #2b3242;
+  border-radius: 7px;
+  color: #e8ebf2;
+  background: #151922;
+  font: inherit;
+}
+
+input {
+  min-width: 220px;
+  padding: 0 11px;
+}
+
+button {
+  cursor: pointer;
+  padding: 0 14px;
+}
+
+button:hover {
+  border-color: #66718b;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+#request {
+  color: #07150e;
+  border-color: #63df9b;
+  background: #63df9b;
+}
+
+.response-panel > div {
+  display: flex;
+  justify-content: space-between;
+}
+
+#response {
+  min-height: 120px;
+  margin: 0;
+  padding: 18px;
+  white-space: pre-wrap;
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+#preview {
+  display: block;
+  width: 100%;
+  min-height: 240px;
+  border: 0;
+  background: white;
+}
+
+#preview[hidden],
+#response[hidden] {
+  display: none;
+}
+
+@media (max-width: 680px) {
+  form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  form label {
+    display: none;
+  }
+
+  input {
+    width: 100%;
+  }
+}

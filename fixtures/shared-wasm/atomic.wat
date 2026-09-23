@@ -1,0 +1,12 @@
+(module
+  (import "env" "memory" (memory 1 2 shared))
+  (func (export "load") (param i32) (result i32)
+    local.get 0 i32.atomic.load)
+  (func (export "store") (param i32 i32)
+    local.get 0 local.get 1 i32.atomic.store)
+  (func (export "add") (param i32 i32) (result i32)
+    local.get 0 local.get 1 i32.atomic.rmw.add)
+  (func (export "wait") (param i32 i32 i64) (result i32)
+    local.get 0 local.get 1 local.get 2 memory.atomic.wait32)
+  (func (export "notify") (param i32 i32) (result i32)
+    local.get 0 local.get 1 memory.atomic.notify))

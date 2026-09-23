@@ -1,0 +1,23 @@
+--- a/source/m3_api_wasi.c
++++ b/source/m3_api_wasi.c
+@@ -577,6 +577,10 @@
+     m3ApiGetArg(__wasi_fdflags_t, fs_flags)
+     m3ApiGetArgMem(__wasi_fd_t*, fd)
+ 
++    // The simple host interface does not consume these WASI arguments.
++    (void) dirflags;
++    (void) fs_rights_inheriting;
++
+     m3ApiCheckMem(path, path_len);
+     m3ApiCheckMem(fd, sizeof(__wasi_fd_t));
+ 
+@@ -820,6 +824,9 @@
+     m3ApiGetArg(__wasi_timestamp_t, precision)
+     m3ApiGetArgMem(__wasi_timestamp_t*, time)
+ 
++    // Both clock implementations return their available precision.
++    (void) precision;
++
+     m3ApiCheckMem(time, sizeof(__wasi_timestamp_t));
+ 
+ #  if d_m3DeterministicProfile

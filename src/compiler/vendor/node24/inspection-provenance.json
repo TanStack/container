@@ -1,0 +1,21 @@
+{
+  "version": "v24.15.0",
+  "license": "MIT",
+  "sources": {
+    "internal/util/inspect": "4df57a8b8c0a2db3fdd448a3fc8452ec1e93362287ff1cb1f573880b8d4e3b37",
+    "internal/per_context/primordials": "6c9fc969aabdb7403f89eb44545a5aa0e90bec8385c71d4b2f70f54a0a8591f8",
+    "internal/util": "a6a3fed1d2de1050cb8b119a2d792246e37abdea4099d90d6994d894f506c429",
+    "internal/errors": "fd278208fae3a83b51a0b948540629ed4e5fd8c7860cb8e4775c6dbf25779750",
+    "internal/validators": "b01b3b0ce9919f157ec0b193bb2cf72ccb1a708cc8c3786acff8afb1287a4f46",
+    "internal/assert": "03940c9b646255b631d3a95cf2a9ad156d587db8b0ac223d1a87f3fd5531a807"
+  },
+  "outputSHA256": "63a517ccff2770b529658cba2494266d94819dd5275f9be9884dc09ffd284a94",
+  "changes": [
+    "CommonJS factories receive private dependencies and guest primordials.",
+    "Retain only declarations used by inspection from util, errors and validators.",
+    "Register the two error codes used by inspection with the original Node constructors and messages.",
+    "Omit the Node startup-snapshot guard; this runtime cannot deserialize those snapshots.",
+    "Use Buffer.prototype.toString with hex encoding instead of Node private hexSlice, retaining endpoint conversion and bounds errors for the inspector-created Uint8Array.",
+    "Skip primordial Atomics capture only when the runtime does not provide that optional namespace."
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "source": "TanStack/router/examples/react/basic-ssr-file-based/package.json",
+  "sourceSHA256": "56d698902cb07ef93e50b316a20552f88350aca8a1f86f5218ecb1b7c055d070",
+  "lockCommand": "npm install --package-lock-only --ignore-scripts --no-audit --no-fund --force",
+  "dependencySubstitutions": true,
+  "graphChanges": {
+    "dependencies": {
+      "@rolldown/binding-wasm32-wasi": "1.2.9",
+      "lightningcss": "npm:lightningcss-wasm@1.33.0"
+    },
+    "overrides": {
+      "rolldown": "1.2.9",
+      "lightningcss": "npm:lightningcss-wasm@1.33.0"
+    }
+  },
+  "env": {
+    "CI": "true",
+    "NAPI_RS_WASI_FLAVOR": "wasm32-wasi",
+    "NAPI_RS_FORCE_WASI": "error",
+    "NAPI_RS_ENFORCE_VERSION_CHECK": "1"
+  }
+}

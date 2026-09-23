@@ -1,0 +1,21 @@
+diff --git a/source/m3_parse.c b/source/m3_parse.c
+--- a/source/m3_parse.c
++++ b/source/m3_parse.c
+@@ -682,6 +682,7 @@
+     // Spec: all export names must be different
+     if (numExports > 1) {
+         exportNames = (ExportName*)m3_Malloc("exportNames", sizeof(ExportName) * numExports);
++        _throwif(m3Err_mallocFailed, not exportNames);
+     }
+ #endif
+ 
+@@ -769,6 +770,9 @@
+             utf8 = NULL; // ownership transferred to M3Tag
+         }
+ #endif
++        else {
++            _throw(m3Err_wasmMalformed);
++        }
+ 
+         m3_Free(utf8);
+     }

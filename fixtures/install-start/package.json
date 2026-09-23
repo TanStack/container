@@ -1,0 +1,14 @@
+{
+  "name": "worker-installed-start",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"dev": "vite", "build": "vite build"},
+  "dependencies": {
+    "@tanstack/react-router": "1.170.15",
+    "@tanstack/react-start": "1.168.25",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {"vite": "7.3.6", "@vitejs/plugin-react": "5.0.4"}
+}

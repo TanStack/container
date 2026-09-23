@@ -1,0 +1,8 @@
+{
+  "name": "installed-esbuild-wasm-probe",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "esbuild-wasm": "0.28.2"
+  }
+}

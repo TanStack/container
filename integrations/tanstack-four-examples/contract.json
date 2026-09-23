@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "tanstack-four-examples-v1",
+  "source": {
+    "repository": "https://github.com/TanStack/router.git",
+    "revision": "6f882b7dae8870e0f51791ec89015f75c74e4c9b",
+    "root": "examples/react",
+    "excludedPaths": [
+      ".git",
+      "node_modules",
+      ".output",
+      ".nitro",
+      ".tanstack-start/build",
+      "dist",
+      "test-results",
+      "playwright-report"
+    ]
+  },
+  "runtimes": {
+    "sdk": {
+      "name": "TanStack browser sandbox SDK",
+      "requiredArtifactFields": ["package", "version", "manifestSHA256", "tarballSHA256"]
+    },
+    "webcontainer": {
+      "name": "StackBlitz WebContainer",
+      "requiredArtifactFields": ["package", "version"]
+    }
+  },
+  "examples": [
+    {
+      "id": "start-counter",
+      "library": "start",
+      "sourcePath": "start-counter",
+      "sourceTreeSHA256": "994b557b9032f302503d5437a14de71a24e3d32f8e9733c81668b424f54e0dff",
+      "entry": "/src/routes/index.tsx",
+      "commands": {
+        "install": ["pnpm", "install"],
+        "start": ["pnpm", "run", "dev"]
+      },
+      "capabilities": ["ssr", "hydration", "server-functions", "filesystem", "live-edit"],
+      "assertions": [
+        {"id": "ssr", "kind": "ssr-text", "text": "Add 1 to 0?"},
+        {"id": "hydration", "kind": "start-hydrated"},
+        {"id": "server-function", "kind": "counter-increment", "from": "Add 1 to 0?", "to": "Add 1 to 1?"},
+        {"id": "live-edit", "kind": "live-edit", "path": "/src/routes/index.tsx", "from": "Add 1 to {state}?", "to": "Parity counter {state}?", "expectedText": "Parity counter 1?"}
+      ]
+    },
+    {
+      "id": "start-basic",
+      "library": "start",
+      "sourcePath": "start-basic",
+      "sourceTreeSHA256": "1a142069dd7eadb47a5edb429aeb8c5a72eccf89a1fb963d4a2a0e6e5ab4fc72",
+      "entry": "/src/routes/index.tsx",
+      "commands": {
+        "install": ["pnpm", "install"],
+        "start": ["pnpm", "run", "dev"]
+      },
+      "capabilities": ["ssr", "hydration", "server-functions", "binary-assets", "client-navigation", "live-edit"],
+      "assertions": [
+        {"id": "ssr", "kind": "ssr-text", "text": "Welcome Home!!!"},
+        {"id": "hydration", "kind": "start-hydrated"},
+        {"id": "binary-asset", "kind": "png-asset", "path": "/favicon-32x32.png"},
+        {"id": "server-function", "kind": "deferred-route", "link": "Deferred", "expectedTexts": ["John Doe", "Tanner Linsley", "Hello deferred!"]},
+        {"id": "live-edit", "kind": "live-edit", "path": "/src/routes/index.tsx", "from": "Welcome Home!!!", "to": "Parity Home!!!", "expectedText": "Parity Home!!!"}
+      ]
+    },
+    {
+      "id": "start-streaming-data-from-server-functions",
+      "library": "start",
+      "sourcePath": "start-streaming-data-from-server-functions",
+      "sourceTreeSHA256": "57a269cbc321fad3c974e38279a33b211832658418845fa4d67d9c36996522e3",
+      "entry": "/src/routes/index.tsx",
+      "commands": {
+        "install": ["pnpm", "install"],
+        "start": ["pnpm", "run", "dev"]
+      },
+      "capabilities": ["ssr", "hydration", "readable-stream", "async-generator", "server-functions", "live-edit"],
+      "assertions": [
+        {"id": "ssr", "kind": "ssr-text", "text": "Typed Readable Stream"},
+        {"id": "hydration", "kind": "start-hydrated"},
+        {"id": "readable-stream", "kind": "ten-stream-chunks", "button": "Get 10 random numbers (ReadableStream)", "outputIndex": 0},
+        {"id": "async-generator", "kind": "ten-stream-chunks", "button": "Get 10 random numbers (Async Generator Function)", "outputIndex": 1},
+        {"id": "live-edit", "kind": "live-edit", "path": "/src/routes/index.tsx", "from": "Typed Readable Stream", "to": "Parity Typed Stream", "expectedText": "Parity Typed Stream"}
+      ]
+    },
+    {
+      "id": "basic-ssr-file-based",
+      "library": "router",
+      "sourcePath": "basic-ssr-file-based",
+      "sourceTreeSHA256": "407a4c1777d425e1ce2b47dad0b41b4450d4f9e263ff98d3d5d22f85c0ac16eb",
+      "entry": "/src/routes/index.tsx",
+      "commands": {
+        "install": ["pnpm", "install"],
+        "start": ["pnpm", "run", "dev"]
+      },
+      "capabilities": ["express", "vite-middleware-mode", "ssr", "hydration", "client-navigation", "live-edit"],
+      "assertions": [
+        {"id": "ssr", "kind": "ssr-text", "text": "Welcome Home!", "responseHeader": {"name": "x-powered-by", "value": "Express"}},
+        {"id": "hydration", "kind": "router-navigation", "link": "Posts", "expectedText": "Select a post."},
+        {"id": "live-edit", "kind": "live-edit", "path": "/src/routes/index.tsx", "from": "Welcome Home!", "to": "Parity Router Home!", "expectedText": "Parity Router Home!"}
+      ]
+    }
+  ],
+  "resultStates": ["passed", "failed", "unsupported", "not-run"]
+}

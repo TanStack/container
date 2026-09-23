@@ -1,0 +1,27 @@
+import {defineConfig} from '@playwright/test'
+import base from './playwright.workloads.config'
+import {readFileSync} from 'node:fs'
+import {createHash} from 'node:crypto'
+const inputs=createHash('sha256')
+inputs.update('COOPERATIVE_GENERATOR_QUEUE='+(process.env.COOPERATIVE_GENERATOR_QUEUE==='1'?'1':'0'))
+inputs.update('COOPERATIVE_YIELD_PROFILE='+(process.env.COOPERATIVE_YIELD_PROFILE==='1'?'1':'0'))
+if(process.env.COOPERATIVE_YIELD_PROFILE==='1')for(const wasm of ['', '-wasm'])inputs.update(readFileSync('public/quickjs-als-asyncify'+wasm+'-generator-queue-yield-profile-cooperative/build.json'))
+if(process.env.COOPERATIVE_GENERATOR_QUEUE==='1')for(const wasm of ['', '-wasm'])inputs.update(readFileSync('public/quickjs-als-asyncify'+wasm+(process.env.ATOMICS_CANDIDATE==='1'?'-atomics':'')+'-generator-queue-cooperative/build.json'))
+inputs.update('COOPERATIVE_KERNEL='+(process.env.COOPERATIVE_KERNEL==='1'?'1':'0'))
+if(process.env.COOPERATIVE_KERNEL==='1')for(const wasm of ['', '-wasm'])inputs.update(readFileSync('public/quickjs-als-asyncify'+wasm+(process.env.ATOMICS_CANDIDATE==='1'?'-atomics':'')+'-cooperative/build.json'))
+inputs.update('VITEST_PROCESS_MIB='+(process.env.VITEST_PROCESS_MIB??'256'))
+inputs.update('ATOMICS_CANDIDATE='+(process.env.ATOMICS_CANDIDATE==='1'?'1':'0'))
+if(process.env.ATOMICS_CANDIDATE==='1')for(const name of ['quickjs-als-atomics','quickjs-als-wasm-atomics'])inputs.update(readFileSync('public/'+name+'/build.json'))
+inputs.update(readFileSync('tests/fixtures/async-emitter.mjs'))
+inputs.update('START_WORKSPACE='+(process.env.START_WORKSPACE==='1'?'1':'0'))
+inputs.update('START_RESTORE='+(process.env.START_RESTORE==='1'?'1':'0'))
+for(const path of ['tests/install-wasm/vitest.spec.ts','fixtures/install-vitest/package.json','fixtures/install-vitest/package-lock.json'])inputs.update(path).update(readFileSync(path))
+for(const path of ['tests/install-wasm/document-ready.spec.ts','preview-host/inspect.js'])inputs.update(path).update(readFileSync(path))
+inputs.update(readFileSync('tests/install-wasm/language.spec.ts'))
+inputs.update(readFileSync('tests/install-wasm/stack.spec.ts'))
+inputs.update(readFileSync('tests/install-wasm/parser.spec.ts'))
+inputs.update(readFileSync('node_modules/@tanstack/start-client-core/dist/esm/createServerFn.js'))
+inputs.update(readFileSync('node_modules/@babel/parser/lib/index.js'))
+for(const path of ['tests/install-wasm/start.spec.ts',...['vite.config.ts','src/router.tsx','src/routes/__root.tsx','src/routes/index.tsx','src/routes/about.tsx'].map(path=>'fixtures/start-basic/'+path)])inputs.update(path).update(readFileSync(path))
+for(const path of ['fixtures/install-start-wasm/package.json','fixtures/install-start-wasm/package-lock.json','tests/install-wasm/vite.spec.ts','tests/install-wasm/preview.spec.ts','tests/install-wasm/websocket.spec.ts','tests/install-wasm/crypto.spec.ts','preview-host/websocket.js'])inputs.update(path).update(readFileSync(path))
+export default defineConfig({...base,metadata:{...base.metadata,wasmInstallationSHA256:inputs.digest('hex')},testDir:'./tests/install-wasm',outputDir:'./test-results/install-wasm',webServer:[...(Array.isArray(base.webServer)?base.webServer:base.webServer?[base.webServer]:[]),{command:'SANDBOX_PREVIEW_PORT=4200 node scripts/serve-preview-host.mjs',url:'http://127.0.0.1:4200/__sandbox/health',reuseExistingServer:false}],reporter:[['list'],['json',{outputFile:'reports/wasm-install-browser-results.json'}]]})

@@ -1,0 +1,42 @@
+[
+  {
+    "name": "global scope and persistent lexical bindings",
+    "code": "\nconst localOnly=99;globalThis.shared=3;\nconst first=vm.runInThisContext('var counter=1; let lexical=7; typeof localOnly');\nconst second=vm.runInThisContext('counter++; [counter,lexical,shared,this===globalThis]');\nlet duplicate;try{vm.runInThisContext('let lexical=9')}catch(error){duplicate=error.name}\nconsole.log(JSON.stringify([first,second,duplicate,globalThis.counter,globalThis.lexical]));\n"
+  },
+  {
+    "name": "compile once, repeat execution, and syntax errors",
+    "code": "\nglobalThis.total=0;\nconst script=new vm.Script('globalThis.total+=3; ({value:total})');\nconst before=total,a=script.runInThisContext(),b=script.runInThisContext();\nlet syntax;try{new vm.Script('let = ;')}catch(error){syntax=error.name}\nconsole.log(JSON.stringify([before,a,b,a!==b,syntax,vm.createScript('42').runInThisContext()]));\n"
+  },
+  {
+    "name": "raw values and promise identity",
+    "code": "\nglobalThis.object={value:7};globalThis.promise=Promise.resolve(object);\nconst a=vm.runInThisContext('object'),b=vm.runInThisContext('promise');\nglobalThis.rejected=Promise.reject(Error('expected'));rejected.catch(()=>{});\nconst c=vm.runInThisContext('rejected');let message;try{await c}catch(e){message=e.message}\nconsole.log(JSON.stringify([a===object,b===promise,await b===object,c===rejected,message,vm.runInThisContext('undefined')===undefined]));\n"
+  },
+  {
+    "name": "source filenames, offsets, and delayed function errors",
+    "code": "\nconst line=error=>Number(error.stack.match(/offset\\.js:(-?\\d+)/)?.[1]);\nlet first,second,syntax;\ntry{vm.runInThisContext('\\nthrow Error(\"first\")',{filename:'offset.js',lineOffset:5})}catch(e){first=line(e)}\nconst fn=vm.runInThisContext('(function(){\\nthrow Error(\"later\")\\n})',{filename:'offset.js',lineOffset:5});\ntry{fn()}catch(e){second=line(e)}\ntry{new vm.Script('\\nlet x = ;',{filename:'offset.js',lineOffset:5})}catch(e){syntax=line(e)}\nconsole.log(JSON.stringify([first,second,syntax]));\n"
+  },
+  {
+    "name": "local timeout is catchable and execution recovers",
+    "code": "\nlet code,name;try{vm.runInThisContext('while(true){}',{timeout:10})}catch(error){code=error.code;name=error.name}\nconsole.log(JSON.stringify([code,name,vm.runInThisContext('6*7')]));\n"
+  },
+  {
+    "name": "outer script timeout bounds nested scripts",
+    "code": "\nglobalThis.nested=()=>vm.runInThisContext('while(true){}',{timeout:1000});\nlet code;try{vm.runInThisContext('nested()',{timeout:10})}catch(error){code=error.code}\nconsole.log(JSON.stringify([code,vm.runInThisContext('42')]));\n"
+  },
+  {
+    "name": "dynamic imports require an explicit callback",
+    "code": "\nconst fn=vm.runInThisContext('(function(){return import(\"./missing.mjs\")})');\nlet code;try{await fn()}catch(error){code=error.code}\nconsole.log(JSON.stringify(code));\n"
+  },
+  {
+    "name": "equal nested deadlines cannot hide the outer timeout",
+    "code": "\nglobalThis.innerScript=new vm.Script('for(;;){}');\nconst outer=new vm.Script('try{innerScript.runInThisContext({timeout:1})}catch(error){\"inner\"}');\nconst counts={};for(let index=0;index<25;index++){let result;try{result=outer.runInThisContext({timeout:1})}catch(error){result=error.code==='ERR_SCRIPT_EXECUTION_TIMEOUT'?'outer':error.name}counts[result]=(counts[result]??0)+1}\nconsole.log(JSON.stringify([counts,vm.runInThisContext('42')]));\n"
+  },
+  {
+    "name": "shared realm functions and callback receivers",
+    "code": "\nconst fn=vm.runInThisContext('(function(value){return [this.label,value instanceof Array,typeof document,typeof fetch]})');\nconsole.log(JSON.stringify(fn.call({label:'guest'},[]).slice(0,3)));\n"
+  },
+  {
+    "name": "invalid options report argument errors",
+    "code": "\nconst seen=[];\nfor(const settings of [{timeout:0},{timeout:1.5},{timeout:'3'},{lineOffset:1.5},{filename:3},{filename:null},{lineOffset:null},{columnOffset:null}]){try{vm.runInThisContext('42',settings);seen.push('unexpected')}catch(e){seen.push(e.code)}}\nconsole.log(JSON.stringify(seen));\n"
+  }
+]

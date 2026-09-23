@@ -1,0 +1,35 @@
+export const constructorSetup = `
+globalThis.inspectConstructors=function(){
+  const name=inspection.getConstructorName;class Foo{};class Bar{};
+  const instance=new Foo(),result=[name(instance)];
+  Object.defineProperty(Foo,'name',{value:'Changed'});result.push(name(instance),name(new Foo()));
+  Foo.prototype.constructor=Bar;result.push(name(instance));
+  Object.setPrototypeOf(instance,null);result.push(name(instance));
+  Object.setPrototypeOf(instance,{constructor:Bar});result.push(name(instance));
+  const prototype={constructor:Foo},created=Object.create(prototype);result.push(name(created));
+  prototype.constructor=Bar;result.push(name(created));
+  let traps=0;const getter=()=>{traps++;throw Error('constructor getter')};
+  result.push(name(Object.create({get constructor(){return getter()}})));
+  const values=[{},Object.create(null),[],/x/,new Date(0),new Map(),new Set(),Promise.resolve(),Object('x'),function named(){},async function asyncNamed(){},function* generator(){},async function* asyncGenerator(){},new Uint8Array(1),new Error(),new TypeError(),new (class Child extends Date{})(),new (class MapChild extends Map{})()];
+  result.push(values.map(name));
+  result.push(name(Reflect.construct(Foo,[],Bar)),name(Reflect.construct(Date,[],Object)),name(Reflect.construct(Object,[],Date)));
+  const Anon=class{};const anonymous=function(){};Object.defineProperty(Anon,'name',{value:'new name'});result.push(name(new Anon()),name(new anonymous()));
+  const methodHolder={method(){},['computed'](){},get value(){return 1}};
+  const symbol=Symbol('method'),symbolHolder={[symbol](){}};
+  const bound=Bar.bind(null),proxy=new Proxy(Bar,{});
+  const callablePrototypes=[methodHolder.method,methodHolder.computed,Object.getOwnPropertyDescriptor(methodHolder,'value').get,symbolHolder[symbol],bound,proxy,()=>{},Object,Date,Map];
+  result.push(callablePrototypes.map(constructor=>name(Object.create({constructor}))));
+  result.push(name(new bound()),name(new proxy()),name(Reflect.construct(Foo,[],bound)),name(Reflect.construct(Foo,[],proxy)));
+  const computedKey='ComputedClass',computedHolder={[computedKey]:class{}};
+  const computedFunctionHolder={[computedKey]:function(){}};
+  result.push(name(new computedHolder[computedKey]()),name(new computedFunctionHolder[computedKey]()));
+  class ReturnsObject {constructor(){return {}}};class ReturnsOther {constructor(){return new Bar()}};
+  result.push(name(new ReturnsObject()),name(new ReturnsOther()));
+  result.push(name(Object.create(Foo.prototype)),name(Object.create(Date.prototype)),name(Object.create(Map.prototype)));
+  const hostile=new Proxy({}, {get(){traps++;throw Error('get')},getPrototypeOf(){traps++;throw Error('prototype')}});
+  result.push(name(hostile),name(Object.create(hostile)));
+  const revoked=Proxy.revocable({},{});revoked.revoke();result.push(name(revoked.proxy));
+  globalThis.retainedConstructorInstance=new (class Retained {})();Object.setPrototypeOf(retainedConstructorInstance,null);
+  result.push(traps);return result;
+};
+`;

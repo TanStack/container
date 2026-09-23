@@ -1,0 +1,48 @@
+diff --git a/quickjs/quickjs.c b/quickjs/quickjs.c
+--- a/quickjs/quickjs.c
++++ b/quickjs/quickjs.c
+@@ -7166,7 +7166,17 @@
+     JSObject *p;
++    JSRuntime *rt = ctx->rt;
++    JSValue saved_exception;
++    BOOL saved_uncatchable;
+ 
+     if (!JS_IsObject(error_obj))
+         return; /* protection in the out of memory case */
++    /* Formatting can itself run out of memory. Keep the original object
++       alive and do not replace the exception being reported. */
++    JS_DupValue(ctx, error_obj);
++    saved_exception = rt->current_exception;
++    saved_uncatchable = rt->current_exception_is_uncatchable;
++    rt->current_exception = JS_UNINITIALIZED;
++    rt->current_exception_is_uncatchable = FALSE;
+     
+     js_dbuf_init(ctx, &dbuf);
+     if (filename) {
+@@ -7178,4 +7188,4 @@
+         str = JS_NewString(ctx, filename);
+         if (JS_IsException(str))
+-            return;
++            goto done;
+         /* Note: SpiderMonkey does that, could update once there is a standard */
+@@ -7187,4 +7197,4 @@
+                                    JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0) {
+-            return;
++            goto done;
+         }
+     }
+@@ -7239,6 +7249,12 @@
+     else
+         str = JS_NewString(ctx, (char *)dbuf.buf);
++    if (!JS_IsException(str))
++        JS_DefinePropertyValue(ctx, error_obj, JS_ATOM_stack, str,
++                               JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
++ done:
++    JS_FreeValue(ctx, rt->current_exception);
++    rt->current_exception = saved_exception;
++    rt->current_exception_is_uncatchable = saved_uncatchable;
+     dbuf_free(&dbuf);
+-    JS_DefinePropertyValue(ctx, error_obj, JS_ATOM_stack, str,
+-                           JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
++    JS_FreeValue(ctx, error_obj);
+ }

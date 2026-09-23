@@ -1,0 +1,23 @@
+{
+  "source": "TanStack/router/examples/react/start-counter/package.json",
+  "sourceSHA256": "b9d633c63fad9dd1e17b2bf326659b560a584dd8bf4c74b06bca32a5dc2a1ff5",
+  "lockCommand": "npm install --package-lock-only --ignore-scripts --no-audit --no-fund --force",
+  "dependencySubstitutions": true,
+  "graphChanges": {
+    "dependencies": {
+      "@rolldown/binding-wasm32-wasi": "1.2.9",
+      "lightningcss": "npm:lightningcss-wasm@1.33.0"
+    },
+    "overrides": {
+      "rolldown": "1.2.9",
+      "lightningcss": "npm:lightningcss-wasm@1.33.0"
+    }
+  },
+  "env": {
+    "CI": "true",
+    "NAPI_RS_WASI_FLAVOR": "wasm32-wasi",
+    "NAPI_RS_FORCE_WASI": "error",
+    "NAPI_RS_ENFORCE_VERSION_CHECK": "1",
+    "NITRO_DEV_RUNNER": "self"
+  }
+}

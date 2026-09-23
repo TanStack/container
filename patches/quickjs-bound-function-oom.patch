@@ -1,0 +1,21 @@
+diff --git a/quickjs/quickjs.c b/quickjs/quickjs.c
+--- a/quickjs/quickjs.c
++++ b/quickjs/quickjs.c
+@@ -5910,6 +5910,8 @@
+     JSBoundFunction *bf = p->u.bound_function;
+     int i;
+ 
++    if (!bf)
++        return;
+     JS_FreeValueRT(rt, bf->func_obj);
+     JS_FreeValueRT(rt, bf->this_val);
+     for(i = 0; i < bf->argc; i++) {
+@@ -5927,6 +5929,8 @@
+     JSBoundFunction *bf = p->u.bound_function;
+     int i;
+ 
++    if (!bf)
++        return;
+     JS_MarkValue(rt, bf->func_obj, mark_func);
+     JS_MarkValue(rt, bf->this_val, mark_func);
+     for(i = 0; i < bf->argc; i++)

@@ -1,0 +1,12 @@
+{
+  "name": "sandbox-astro-wasi-fixture",
+  "private": true,
+  "version": "0.0.0",
+  "optionalDependencies": {
+    "@astrojs/compiler-binding-wasm32-wasi": "0.4.0"
+  },
+  "dependencies": {
+    "@emnapi/core": "1.11.3",
+    "@emnapi/runtime": "1.11.3"
+  }
+}

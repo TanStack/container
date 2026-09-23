@@ -1,0 +1,21 @@
+{
+  "target": "tanstack-start-browser-runtime",
+  "scope": "Original runtime worker, not the newer WorkerKernel. Current WorkerKernel evidence is in reports/current-workload-matrix.json and reports/current-workload-summary.md.",
+  "statuses": ["implemented", "partial", "planned", "excluded"],
+  "modules": [
+    { "name": "node:path", "status": "partial", "evidence": "browser e2e" },
+    { "name": "node:fs/promises", "status": "partial", "evidence": "browser e2e" },
+    { "name": "node:process", "status": "partial", "evidence": "browser e2e" },
+    { "name": "node:buffer", "status": "planned", "evidence": null },
+    { "name": "node:events", "status": "planned", "evidence": null },
+    { "name": "node:stream", "status": "partial", "evidence": "web streams and Start SSR browser branch" },
+    { "name": "node:async_hooks", "status": "partial", "evidence": "request-isolation e2e passes; concurrent nested-store conformance fails in all three engines" },
+    { "name": "node:crypto", "status": "planned", "evidence": null },
+    { "name": "node:module", "status": "planned", "evidence": null },
+    { "name": "node:child_process", "status": "excluded", "evidence": null },
+    { "name": "node:cluster", "status": "excluded", "evidence": null },
+    { "name": "node:dgram", "status": "excluded", "evidence": null },
+    { "name": "node:net", "status": "excluded", "evidence": null },
+    { "name": "node:tls", "status": "excluded", "evidence": null }
+  ]
+}

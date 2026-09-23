@@ -1,0 +1,10 @@
+(module
+  (import "env" "memory" (memory 1 2 shared))
+  (export "memory" (memory 0))
+  (func (export "load") (param i32) (result i32)
+    local.get 0 i32.load)
+  (func (export "store") (param i32 i32)
+    local.get 0 local.get 1 i32.store)
+  (func (export "grow") (param i32) (result i32)
+    local.get 0 memory.grow)
+  (func (export "size") (result i32) memory.size))

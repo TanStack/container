@@ -1,0 +1,30 @@
+diff --git a/quickjs/quickjs.c b/quickjs/quickjs.c
+--- a/quickjs/quickjs.c
++++ b/quickjs/quickjs.c
+@@ -34095,1 +34095,1 @@
+-    int pos, pos_next, bc_len, op, len, line_num, i, idx;
++    int pos, pos_next, bc_len, op, len, line_num, i, idx, resolved_pos;
+@@ -34176,6 +34176,9 @@
+             var_name = get_u32(bc_buf + pos + 1);
+             scope = get_u16(bc_buf + pos + 5);
+-            pos_next = resolve_scope_var(ctx, s, var_name, scope, op, &bc_out,
+-                                         NULL, NULL, pos_next);
++            resolved_pos = resolve_scope_var(ctx, s, var_name, scope, op, &bc_out,
++                                             NULL, NULL, pos_next);
++            if (resolved_pos < 0)
++                goto fail;
++            pos_next = resolved_pos;
+             JS_FreeAtom(ctx, var_name);
+             break;
+@@ -34190,6 +34193,9 @@
+                 ls->ref_count--;  /* always remove label reference */
+-                pos_next = resolve_scope_var(ctx, s, var_name, scope, op, &bc_out,
+-                                             bc_buf, ls, pos_next);
++                resolved_pos = resolve_scope_var(ctx, s, var_name, scope, op, &bc_out,
++                                                 bc_buf, ls, pos_next);
++                if (resolved_pos < 0)
++                    goto fail;
++                pos_next = resolved_pos;
+                 JS_FreeAtom(ctx, var_name);
+             }
+             break;

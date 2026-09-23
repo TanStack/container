@@ -1,0 +1,23 @@
+import {WASI} from 'node:wasi'
+const wasi=new WASI({version:'preview1',preopens:{'/data':process.env.WASI_FIXTURE_ROOT??'/data'},returnOnExit:true})
+const binary=new Uint8Array([0,97,115,109,1,0,0,0,5,3,1,0,1,7,10,1,6,109,101,109,111,114,121,2,0])
+const instance=new WebAssembly.Instance(new WebAssembly.Module(binary),wasi.getImportObject())
+wasi.initialize(instance)
+const view=new DataView(instance.exports.memory.buffer),bytes=new Uint8Array(instance.exports.memory.buffer)
+const api=wasi.wasiImport,codes=[]
+const path=name=>{const data=new TextEncoder().encode(name);bytes.set(data,128);return data.length}
+codes.push(api.fd_prestat_get(3,0),api.fd_prestat_dir_name(3,8,5))
+const preopen=new TextDecoder().decode(bytes.subarray(8,13))
+codes.push(api.path_open(3,1,128,path('input.txt'),0,2n|4n|32n|2097152n,0n,0,64))
+const input=view.getUint32(64,true)
+view.setUint32(80,256,true);view.setUint32(84,64,true)
+codes.push(api.fd_read(input,80,1,88))
+const text=new TextDecoder().decode(bytes.subarray(256,256+view.getUint32(88,true)))
+codes.push(api.fd_seek(input,-2n,2,96),api.fd_read(input,80,1,88))
+const tail=new TextDecoder().decode(bytes.subarray(256,256+view.getUint32(88,true)))
+codes.push(api.fd_close(input))
+codes.push(api.path_open(3,1,128,path('output.txt'),1|8,64n|2097152n,0n,0,64))
+const output=view.getUint32(64,true)
+bytes.set(new TextEncoder().encode('saved'),256);view.setUint32(84,5,true)
+codes.push(api.fd_write(output,80,1,88),api.fd_close(output))
+console.log(JSON.stringify({codes,preopen,text,tail}))

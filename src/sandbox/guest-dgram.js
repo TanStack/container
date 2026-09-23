@@ -1,0 +1,27 @@
+import {EventEmitter} from 'node:events'
+import {Buffer} from 'node:buffer'
+import process from 'node:process'
+const fail=(code,message=code)=>Object.assign(Error(message),{code})
+const transport=()=>{const value=globalThis.__webContainerHost.dgram;if(!value)throw fail('ERR_UNSUPPORTED_OPERATION');return value}
+const bytes=(msg,offset,length)=>{let value=Array.isArray(msg)&&!msg.every(item=>typeof item==='number')?Buffer.concat(msg.map(item=>bytes(item))):Buffer.isBuffer(msg)?msg:typeof msg==='string'?Buffer.from(msg):ArrayBuffer.isView(msg)?Buffer.from(msg.buffer,msg.byteOffset,msg.byteLength):Buffer.from(msg);if(offset!==undefined)value=value.subarray(offset,offset+length);return value}
+export class Socket extends EventEmitter{
+  constructor(type,listener){super();let reuseAddr=false;if(type&&typeof type==='object'){if(type.fd!==undefined||type.reusePort!==undefined||type.lookup!==undefined)throw fail('ERR_UNSUPPORTED_OPERATION','Host file descriptors, port sharing and DNS lookup hooks are unavailable');reuseAddr=type.reuseAddr===true;type=type.type}if(type!=='udp4'&&type!=='udp6')throw fail('ERR_INVALID_ARG_VALUE');this.type=type;this._id=transport().call('create',type,reuseAddr).id;this._bound=false;this._closed=false;this._ref=true;if(typeof listener==='function')this.on('message',listener)}
+  bind(...args){if(this._closed)throw fail('ERR_SOCKET_DGRAM_NOT_RUNNING');let options=args[0],callback=typeof args.at(-1)==='function'?args.at(-1):undefined;if(callback)this.once('listening',callback);if(typeof options!=='object'||options===null)options={port:options,address:typeof args[1]==='string'?args[1]:undefined};if(options.fd!==undefined||options.exclusive!==undefined||options.reusePort!==undefined)throw fail('ERR_UNSUPPORTED_OPERATION','File descriptors and host socket options are unavailable');process.nextTick(()=>{if(this._closed)return;try{this._address=transport().call('bind',this._id,Number(options.port??0),options.address);this._bound=true;this.emit('listening');this._pump()}catch(error){this.emit('error',error)}});return this}
+  _ensureBound(){if(!this._bound){this._address=transport().call('bind',this._id,0);this._bound=true;process.nextTick(()=>this.emit('listening'));this._pump()}}
+  _pump(){if(this._reading||this._closed||!this._bound)return;this._reading=true;transport().next(this._id).then(event=>globalThis[Symbol.for('web-container:task-queue')].task(()=>{this._reading=false;if(this._closed)return;if(event?.type==='message'){this.emit('message',Buffer.from(event.bytes),event.rinfo);this._pump()}}),error=>globalThis[Symbol.for('web-container:task-queue')].task(()=>{this._reading=false;if(!this._closed)this.emit('error',error)})).catch(error=>globalThis.__webContainerHost.reportError(error))}
+  send(msg,...args){if(this._closed)throw fail('ERR_SOCKET_DGRAM_NOT_RUNNING');let callback=typeof args.at(-1)==='function'?args.pop():undefined,offset,length,port,address;if(typeof args[0]==='number'&&typeof args[1]==='number'&&typeof args[2]==='number'){[offset,length,port,address]=args}else [port,address]=args;const data=bytes(msg,offset,length);this._ensureBound();process.nextTick(()=>{try{const sent=transport().call('send',this._id,Array.from(data),port===undefined?undefined:Number(port),address);callback?.(null,sent)}catch(error){if(callback)callback(error);else this.emit('error',error)}});return undefined}
+  connect(port,address,callback){if(typeof address==='function'){callback=address;address=undefined}if(callback)this.once('connect',callback);this._ensureBound();process.nextTick(()=>{try{this._remote=transport().call('connect',this._id,Number(port),address??(this.type==='udp4'?'127.0.0.1':'::1'));this.emit('connect')}catch(error){this.emit('error',error)}});return this}
+  disconnect(){transport().call('disconnect',this._id);this._remote=undefined;return this}
+  remoteAddress(){return transport().call('remoteAddress',this._id)}
+  address(){if(!this._bound)throw fail('EBADF','getsockname EBADF');return transport().call('address',this._id)}
+  close(callback){if(this._closed)throw fail('ERR_SOCKET_DGRAM_NOT_RUNNING');if(callback)this.once('close',callback);this._closed=true;transport().call('close',this._id);process.nextTick(()=>this.emit('close'));return this}
+  addMembership(address,iface){transport().call('membership',this._id,address,true,iface);this._bound=true;this._address=transport().call('address',this._id);this._pump();return this}
+  dropMembership(address,iface){transport().call('membership',this._id,address,false,iface);return this}
+  addSourceSpecificMembership(){throw fail('ERR_UNSUPPORTED_OPERATION','Source-specific membership is unavailable')}
+  dropSourceSpecificMembership(){throw fail('ERR_UNSUPPORTED_OPERATION','Source-specific membership is unavailable')}
+  setBroadcast(value){transport().call('broadcast',this._id,value);return this}
+  ref(){this._ref=true;transport().call('ref',this._id,true);return this}unref(){this._ref=false;transport().call('ref',this._id,false);return this}
+  setTTL(){throw fail('ERR_UNSUPPORTED_OPERATION','Host UDP options are unavailable')}setMulticastTTL(){throw fail('ERR_UNSUPPORTED_OPERATION','Host UDP options are unavailable')}setMulticastLoopback(){throw fail('ERR_UNSUPPORTED_OPERATION','Host UDP options are unavailable')}setMulticastInterface(){throw fail('ERR_UNSUPPORTED_OPERATION','Real network interfaces are unavailable')}getSendQueueSize(){return 0}getSendQueueCount(){return 0}
+}
+export const createSocket=(type,listener)=>new Socket(type,listener)
+export default {Socket,createSocket}

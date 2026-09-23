@@ -1,0 +1,211 @@
+diff --git a/vendor/quickjs/quickjs.c b/vendor/quickjs/quickjs.c
+index e32f0f3..15a2721 100644
+--- a/vendor/quickjs/quickjs.c
++++ b/vendor/quickjs/quickjs.c
+@@ -464,6 +464,8 @@ struct JSContext {
+     JSValue array_ctor;
+     JSValue regexp_ctor;
+     JSValue promise_ctor;
++    /* Embedder async context, captured at reaction registration. */
++    JSValue async_context;
+     JSValue native_error_proto[JS_NATIVE_ERROR_COUNT];
+     JSValue iterator_ctor;
+     JSValue async_iterator_proto;
+@@ -875,6 +877,7 @@ typedef struct JSJobEntry {
+     struct list_head link;
+     JSContext *realm;
+     JSJobFunc *job_func;
++    JSValue async_context;
+     int argc;
+     JSValue argv[0];
+ } JSJobEntry;
+@@ -1854,6 +1857,7 @@ int JS_EnqueueJob(JSContext *ctx, JSJobFunc *job_func,
+         return -1;
+     e->realm = JS_DupContext(ctx);
+     e->job_func = job_func;
++    e->async_context = JS_DupValue(ctx, ctx->async_context);
+     e->argc = argc;
+     for(i = 0; i < argc; i++) {
+         e->argv[i] = JS_DupValue(ctx, argv[i]);
+@@ -1876,7 +1880,7 @@ int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx)
+ {
+     JSContext *ctx;
+     JSJobEntry *e;
+-    JSValue res;
++    JSValue res, previous_context;
+     int i, ret;
+ 
+     if (list_empty(&rt->job_list)) {
+@@ -1889,7 +1893,11 @@ int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx)
+     e = list_entry(rt->job_list.next, JSJobEntry, link);
+     list_del(&e->link);
+     ctx = e->realm;
++    previous_context = ctx->async_context;
++    ctx->async_context = e->async_context;
+     res = e->job_func(ctx, e->argc, (JSValueConst *)e->argv);
++    JS_FreeValue(ctx, ctx->async_context);
++    ctx->async_context = previous_context;
+     for(i = 0; i < e->argc; i++)
+         JS_FreeValue(ctx, e->argv[i]);
+     if (JS_IsException(res))
+@@ -1985,6 +1993,7 @@ void JS_FreeRuntime(JSRuntime *rt)
+         JSJobEntry *e = list_entry(el, JSJobEntry, link);
+         for(i = 0; i < e->argc; i++)
+             JS_FreeValueRT(rt, e->argv[i]);
++        JS_FreeValueRT(rt, e->async_context);
+         JS_FreeContext(e->realm);
+         js_free_rt(rt, e);
+     }
+@@ -2171,6 +2180,7 @@ JSContext *JS_NewContextRaw(JSRuntime *rt)
+     if (!ctx)
+         return NULL;
+     ctx->header.ref_count = 1;
++    ctx->async_context = JS_UNDEFINED;
+     add_gc_object(rt, &ctx->header, JS_GC_OBJ_TYPE_JS_CONTEXT);
+ 
+     ctx->class_proto = js_malloc_rt(rt, sizeof(ctx->class_proto[0]) *
+@@ -2313,6 +2323,7 @@ static void JS_MarkContext(JSRuntime *rt, JSContext *ctx,
+     JS_MarkValue(rt, ctx->iterator_ctor, mark_func);
+     JS_MarkValue(rt, ctx->async_iterator_proto, mark_func);
+     JS_MarkValue(rt, ctx->promise_ctor, mark_func);
++    JS_MarkValue(rt, ctx->async_context, mark_func);
+     JS_MarkValue(rt, ctx->array_ctor, mark_func);
+     JS_MarkValue(rt, ctx->regexp_ctor, mark_func);
+     JS_MarkValue(rt, ctx->function_ctor, mark_func);
+@@ -2389,6 +2400,7 @@ void JS_FreeContext(JSContext *ctx)
+     JS_FreeValue(ctx, ctx->iterator_ctor);
+     JS_FreeValue(ctx, ctx->async_iterator_proto);
+     JS_FreeValue(ctx, ctx->promise_ctor);
++    JS_FreeValue(ctx, ctx->async_context);
+     JS_FreeValue(ctx, ctx->array_ctor);
+     JS_FreeValue(ctx, ctx->regexp_ctor);
+     JS_FreeValue(ctx, ctx->function_ctor);
+@@ -52322,6 +52334,7 @@ typedef struct JSPromiseReactionData {
+     struct list_head link; /* not used in promise_reaction_job */
+     JSValue resolving_funcs[2];
+     JSValue handler;
++    JSValue async_context;
+ } JSPromiseReactionData;
+ 
+ JSPromiseStateEnum JS_PromiseState(JSContext *ctx, JSValue promise)
+@@ -52349,6 +52362,7 @@ static void promise_reaction_data_free(JSRuntime *rt,
+     JS_FreeValueRT(rt, rd->resolving_funcs[0]);
+     JS_FreeValueRT(rt, rd->resolving_funcs[1]);
+     JS_FreeValueRT(rt, rd->handler);
++    JS_FreeValueRT(rt, rd->async_context);
+     js_free_rt(rt, rd);
+ }
+ 
+@@ -52356,10 +52370,12 @@ static JSValue promise_reaction_job(JSContext *ctx, int argc,
+                                     JSValueConst *argv)
+ {
+     JSValueConst handler, arg, func;
+-    JSValue res, res2;
++    JSValue res, res2, previous_context;
+     BOOL is_reject;
+ 
+-    assert(argc == 5);
++    assert(argc == 6);
++    previous_context = ctx->async_context;
++    ctx->async_context = JS_DupValue(ctx, argv[5]);
+     handler = argv[2];
+     is_reject = JS_ToBool(ctx, argv[3]);
+     arg = argv[4];
+@@ -52391,6 +52407,8 @@ static JSValue promise_reaction_job(JSContext *ctx, int argc,
+     }
+     JS_FreeValue(ctx, res);
+ 
++    JS_FreeValue(ctx, ctx->async_context);
++    ctx->async_context = previous_context;
+     return res2;
+ }
+ 
+@@ -52408,7 +52426,7 @@ static void fulfill_or_reject_promise(JSContext *ctx, JSValueConst promise,
+     JSPromiseData *s = JS_GetOpaque(promise, JS_CLASS_PROMISE);
+     struct list_head *el, *el1;
+     JSPromiseReactionData *rd;
+-    JSValueConst args[5];
++    JSValueConst args[6];
+ 
+     if (!s || s->promise_state != JS_PROMISE_PENDING)
+         return; /* should never happen */
+@@ -52432,7 +52450,8 @@ static void fulfill_or_reject_promise(JSContext *ctx, JSValueConst promise,
+         args[2] = rd->handler;
+         args[3] = JS_NewBool(ctx, is_reject);
+         args[4] = value;
+-        JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
++        args[5] = rd->async_context;
++        JS_EnqueueJob(ctx, promise_reaction_job, 6, args);
+         list_del(&rd->link);
+         promise_reaction_data_free(ctx->rt, rd);
+     }
+@@ -52633,6 +52652,7 @@ static void js_promise_mark(JSRuntime *rt, JSValueConst val,
+             JS_MarkValue(rt, rd->resolving_funcs[0], mark_func);
+             JS_MarkValue(rt, rd->resolving_funcs[1], mark_func);
+             JS_MarkValue(rt, rd->handler, mark_func);
++            JS_MarkValue(rt, rd->async_context, mark_func);
+         }
+     }
+     JS_MarkValue(rt, s->promise_result, mark_func);
+@@ -53182,6 +53202,7 @@ static __exception int perform_promise_then(JSContext *ctx,
+         if (!JS_IsFunction(ctx, handler))
+             handler = JS_UNDEFINED;
+         rd->handler = JS_DupValue(ctx, handler);
++        rd->async_context = JS_DupValue(ctx, ctx->async_context);
+         rd_array[i] = rd;
+     }
+ 
+@@ -53189,7 +53210,7 @@ static __exception int perform_promise_then(JSContext *ctx,
+         for(i = 0; i < 2; i++)
+             list_add_tail(&rd_array[i]->link, &s->promise_reactions[i]);
+     } else {
+-        JSValueConst args[5];
++        JSValueConst args[6];
+         if (s->promise_state == JS_PROMISE_REJECTED && !s->is_handled) {
+             JSRuntime *rt = ctx->rt;
+             if (rt->host_promise_rejection_tracker) {
+@@ -53204,7 +53225,8 @@ static __exception int perform_promise_then(JSContext *ctx,
+         args[2] = rd->handler;
+         args[3] = JS_NewBool(ctx, i);
+         args[4] = s->promise_result;
+-        JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
++        args[5] = rd->async_context;
++        JS_EnqueueJob(ctx, promise_reaction_job, 6, args);
+         for(i = 0; i < 2; i++)
+             promise_reaction_data_free(ctx->rt, rd_array[i]);
+     }
+@@ -53602,12 +53624,34 @@ static JSClassShortDef const js_async_class_def[] = {
+     { JS_ATOM_AsyncGenerator, js_async_generator_finalizer, js_async_generator_mark },  /* JS_CLASS_ASYNC_GENERATOR */
+ };
+ 
++/* Bootstrap consumes and removes these globals before guest evaluation. */
++static JSValue js_get_async_context(JSContext *ctx, JSValueConst this_val,
++                                    int argc, JSValueConst *argv)
++{
++    return JS_DupValue(ctx, ctx->async_context);
++}
++
++static JSValue js_set_async_context(JSContext *ctx, JSValueConst this_val,
++                                    int argc, JSValueConst *argv)
++{
++    JSValue next = JS_DupValue(ctx, argv[0]);
++    JS_FreeValue(ctx, ctx->async_context);
++    ctx->async_context = next;
++    return JS_UNDEFINED;
++}
++
+ int JS_AddIntrinsicPromise(JSContext *ctx)
+ {
+     JSRuntime *rt = ctx->rt;
+     JSValue obj1;
+     JSCFunctionType ft;
+ 
++    if (JS_SetPropertyStr(ctx, ctx->global_obj, "__qjsGetAsyncContext",
++          JS_NewCFunction(ctx, js_get_async_context, "getAsyncContext", 0)) < 0 ||
++        JS_SetPropertyStr(ctx, ctx->global_obj, "__qjsSetAsyncContext",
++          JS_NewCFunction(ctx, js_set_async_context, "setAsyncContext", 1)) < 0)
++        return -1;
++
+     if (!JS_IsRegisteredClass(rt, JS_CLASS_PROMISE)) {
+         if (init_class_range(rt, js_async_class_def, JS_CLASS_PROMISE,
+                              countof(js_async_class_def)))

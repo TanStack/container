@@ -1,0 +1,17 @@
+{
+  "project": "Node.js",
+  "version": "24.15.0",
+  "license": "MIT",
+  "sources": [
+    {"local":"querystring.cjs","upstream":"https://github.com/nodejs/node/blob/v24.15.0/lib/querystring.js","adaptedSHA256":"9ef505338bfa120d1d51c26788577cf092fd2f838e73b5d270d74721606712db"},
+    {"local":"querystring-internal.cjs","upstream":"https://github.com/nodejs/node/blob/v24.15.0/lib/internal/querystring.js","adaptedSHA256":"c14bc9cf59a7c560f2e74c8a51845146b3f1aea3da2a81543af0fc8be5de3ffb"},
+    {"local":"path.cjs","upstream":"https://github.com/nodejs/node/blob/v24.15.0/lib/path.js","adaptedSHA256":"5936f0bf2f17ef6e0d9166bf56c100daca930d2a383156b694344428de239e6c"}
+  ],
+  "changes": [
+    "Import the required guest intrinsics from primordials.cjs.",
+    "Redirect Node internal requires to the checked local adapters.",
+    "Use a guest URIError subclass for ERR_INVALID_URI.",
+    "Path bindings use virtual POSIX process state, validate argument types, and reject matchesGlob explicitly.",
+    "Argument error codes are retained, but Node's full error-message formatting is not ported."
+  ]
+}

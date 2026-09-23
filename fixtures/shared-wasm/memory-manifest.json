@@ -1,0 +1,17 @@
+{
+  "assemblerSHA256": "ec365944cb1ebeb07f18140c66118c1b64fb49ca90d5a024ddb0dc82e35cbae8",
+  "fixtures": [
+    {
+      "name": "memory",
+      "sourceSHA256": "9c86676189de061e8f67403d83a1bd3710ae5d2eb710119791e239b0713cdfde",
+      "wasmSHA256": "5a242dbcd423443e9ce3994e9d88d802391227775dab87fb572d151fdb2acf3c",
+      "bytes": 124
+    },
+    {
+      "name": "memory-unshared",
+      "sourceSHA256": "36402e67d97563f33f2559ba0f4d997caf95e3a7f5b212c10c3b69f3dd0f7d9f",
+      "wasmSHA256": "c4001be5bfcf5cf68f791c08bd0fd80520abdd256a96a274b57f345771afde51",
+      "bytes": 38
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "sandbox-vite-rolldown-wasm-fixture",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "vite": "8.3.0",
+    "@rolldown/binding-wasm32-wasi": "1.2.8",
+    "lightningcss": "npm:lightningcss-wasm@1.33.0"
+  },
+  "overrides": {
+    "lightningcss": "npm:lightningcss-wasm@1.33.0"
+  }
+}

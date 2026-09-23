@@ -1,0 +1,234 @@
+--- a/source/m3_compile.c
++++ b/source/m3_compile.c
+@@ -3173,7 +3173,7 @@
+ }
+ 
+ static
+-M3Result Compile_LoopOrBlock (IM3Compilation o, m3opcode_t i_opcode)
++M3Result PrepareLoopOrBlock (IM3Compilation o, m3opcode_t i_opcode, IM3FuncType* o_blockType)
+ {
+     M3Result result;
+ 
+@@ -3211,9 +3211,19 @@
+     } else {
+     }
+ 
+-_   (CompileBlock(o, blockType, i_opcode));
++    *o_blockType = blockType;
+ 
+     _catch: return result;
++}
++
++static
++M3Result Compile_LoopOrBlock (IM3Compilation o, m3opcode_t i_opcode)
++{
++    IM3FuncType blockType;
++_try {
++_   (PrepareLoopOrBlock(o, i_opcode, &blockType));
++_   (CompileBlock(o, blockType, i_opcode));
++} _catch: return result;
+ }
+ 
+ #if d_m3HasExceptionHandling
+@@ -3499,7 +3509,7 @@
+ }
+ 
+ static
+-M3Result Compile_If (IM3Compilation o, m3opcode_t i_opcode)
++M3Result PrepareIf (IM3Compilation o, IM3FuncType* o_blockType, pc_t** o_elsePC)
+ {
+     /*      [   op_If   ]
+             [ <else-pc> ]   ---->   [ ..else..  ]
+@@ -3540,7 +3550,19 @@
+ 
+     IM3FuncType blockType = NULL;
+ _   (ReadBlockType(o, &blockType));     //  dump_type_stack (o);
++
++    *o_blockType = blockType;
++    *o_elsePC = pc;
++} _catch: return result;
++}
+ 
++static
++M3Result Compile_If (IM3Compilation o, m3opcode_t i_opcode)
++{
++    IM3FuncType blockType;
++    pc_t* pc;
++_try {
++_   (PrepareIf(o, &blockType, &pc));
+     u16 stackIndex = o->stackIndex;
+ 
+ _   (CompileBlock(o, blockType, i_opcode));
+@@ -4799,10 +4821,30 @@
+ #endif // d_m3HasGasMetering
+ 
+ 
++static M3Result BeginCompilationBlock (IM3Compilation o, IM3FuncType i_blockType,
++                                      m3opcode_t i_blockOpcode, M3CompilationScope* outer);
++static M3Result FinishCompilationBlock (IM3Compilation o);
++
++/* Stable heap addresses replace the recursive C frames for block/loop/if.
++   Branches retain pointers into outer scopes while a body is compiled, so a
++   relocatable array cannot hold these records. This stack belongs to one call
++   of CompileBlockStatements and is unwound on every error path. */
++typedef struct M3CompileFrame {
++    struct M3CompileFrame* next;
++    M3CompilationScope outer;
++    IM3FuncType type;
++    pc_t* endPC;
++    pc_t* elsePC;
++    u16 stackIndex;
++    m3opcode_t opcode;
++    bool scopeActive;
++} M3CompileFrame;
++
+ M3Result CompileBlockStatements (IM3Compilation o)
+ {
+     M3Result result   = m3Err_none;
+     bool     validEnd = false;
++    M3CompileFrame* frames = NULL;
+ 
+     while (o->wasm < o->wasmEnd) {
+ #if d_m3EnableOpTracing
+@@ -4852,6 +4894,23 @@
+ _       (MeterOpcode(o, opcode));
+ #endif
+ 
++        if (opcode == c_waOp_block or opcode == c_waOp_loop or opcode == c_waOp_if) {
++            M3CompileFrame* frame = m3_AllocStruct(M3CompileFrame);
++            _throwifnull(frame);
++            frame->next = frames;
++            frames = frame;
++            frame->opcode = opcode;
++            if (opcode == c_waOp_if) {
++_               (PrepareIf(o, &frame->type, &frame->elsePC));
++            } else {
++_               (PrepareLoopOrBlock(o, opcode, &frame->type));
++            }
++            frame->stackIndex = o->stackIndex;
++            frame->scopeActive = true;
++_           (BeginCompilationBlock(o, frame->type, opcode, &frame->outer));
++            continue;
++        }
++
+         if (opinfo->compiler != c_cc_NULL) {
+ _           ((*GetCompiler(opinfo))(o, opcode))
+         } else {
+@@ -4862,16 +4921,49 @@
+ 
+         if (opcode == c_waOp_else) {
+             _throwif(m3Err_wasmMalformed, o->block.opcode != c_waOp_if);
+-            validEnd = true;
+-            break;
+-        } else if (opcode == c_waOp_end) {
+-            validEnd = true;
+-            break;
+         }
++        if (opcode == c_waOp_else or opcode == c_waOp_end) {
++            if (not frames) {
++                validEnd = true;
++                break;
++            }
++            M3CompileFrame* frame = frames;
++_           (FinishCompilationBlock(o));
++            o->block = frame->outer;
++            frame->scopeActive = false;
++
++            if (frame->opcode == c_waOp_if and not frame->endPC) {
++                if (opcode == c_waOp_else or GetFuncTypeNumResults(frame->type)) {
++                    if (opcode != c_waOp_else) o->wasm--; // implicit pass-through else
++                    o->stackIndex = frame->stackIndex;
++                    // Put the else arm after the then arm. The branch skips it
++                    // on the then path, without retaining one code page per
++                    // nested else. PatchBranches above targets this branch.
++_                   (EmitOp(o, op_Branch));
++                    frame->endPC = (pc_t*)ReservePointer(o);
++                    *frame->elsePC = GetPC(o);
++                    frame->scopeActive = true;
++_                   (BeginCompilationBlock(o, frame->type, c_waOp_else, &frame->outer));
++                    continue;
++                }
++                *frame->elsePC = GetPC(o);
++            } else if (frame->endPC) {
++                *frame->endPC = GetPC(o);
++            }
++            o->previousOpcode = frame->opcode;
++            frames = frame->next;
++            m3_Free(frame);
++        }
+     }
+     _throwif(m3Err_wasmMalformed, not validEnd);
+ 
+ _catch:
++    while (frames) {
++        M3CompileFrame* frame = frames;
++        if (frame->scopeActive) o->block = frame->outer;
++        frames = frame->next;
++        m3_Free(frame);
++    }
+     return result;
+ }
+ 
+@@ -4896,16 +4988,18 @@
+ }
+ 
+ 
+-M3Result CompileBlock (IM3Compilation o, IM3FuncType i_blockType, m3opcode_t i_blockOpcode)
++static
++M3Result BeginCompilationBlock (IM3Compilation o, IM3FuncType i_blockType,
++                                m3opcode_t i_blockOpcode, M3CompilationScope* outer)
+ {
+                                                                                         d_m3Assert (not IsRegisterAllocated (o, 0));
+                                                                                         d_m3Assert (not IsRegisterAllocated (o, 1));
+     InvalidateFold(o);
+ 
+-    M3CompilationScope  outerScope = o->block;
++    *outer = o->block;
+     M3CompilationScope* block      = &o->block;
+ 
+-    block->outer   = &outerScope;
++    block->outer   = outer;
+     block->pc      = GetPagePC(o->page);
+     block->patches = NULL;
+     block->type    = i_blockType;
+@@ -4993,8 +5087,15 @@
+     }
+ #endif
+ 
+-_   (CompileBlockStatements(o));
++} _catch: return result;
++}
+ 
++static
++M3Result FinishCompilationBlock (IM3Compilation o)
++{
++    m3opcode_t i_blockOpcode = o->block.opcode;
++    u16 numResults = GetFuncTypeNumResults(o->block.type);
++_try {
+ _   (ValidateBlockEnd(o));
+ 
+     if (o->function)    // skip for expressions
+@@ -5023,11 +5124,21 @@
+ 
+     PatchBranches(o);
+ 
+-    o->block = outerScope;
+-
+ } _catch: return result;
+ }
+ 
++M3Result CompileBlock (IM3Compilation o, IM3FuncType i_blockType, m3opcode_t i_blockOpcode)
++{
++    M3CompilationScope outer;
++_try {
++_   (BeginCompilationBlock(o, i_blockType, i_blockOpcode, &outer));
++_   (CompileBlockStatements(o));
++_   (FinishCompilationBlock(o));
++} _catch:
++    o->block = outer;
++    return result;
++}
++
+ static
+ M3Result CompileLocals (IM3Compilation o)
+ {

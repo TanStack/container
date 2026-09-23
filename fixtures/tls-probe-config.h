@@ -1,0 +1,14 @@
+#ifndef WEB_CONTAINER_TLS_PROBE_CONFIG_H
+#define WEB_CONTAINER_TLS_PROBE_CONFIG_H
+/* No filesystem, OS sockets or ambient entropy fallback in this build. */
+#undef MBEDTLS_NET_C
+#undef MBEDTLS_FS_IO
+#undef MBEDTLS_PSA_CRYPTO_STORAGE_C
+#undef MBEDTLS_PSA_ITS_FILE_C
+#undef MBEDTLS_HAVE_ASM
+#undef MBEDTLS_AESNI_C
+#undef MBEDTLS_PADLOCK_C
+#define MBEDTLS_PLATFORM_MEMORY
+#define MBEDTLS_NO_PLATFORM_ENTROPY
+#define MBEDTLS_ENTROPY_HARDWARE_ALT
+#endif

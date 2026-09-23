@@ -1,0 +1,11 @@
+{
+  "bindingVersion": "1.2.9",
+  "lockSHA256": "0c622ef5512c6aa25b92da14556566c929c3b583526b3482b51dbdc225615b46",
+  "wasmSHA256": "629aa10c37a9920cd5729a35af148983c881f4ff9edd6368a7d63b5acbf89dc2",
+  "pthreadSHA256": "c75b826181d93cfa9df7a5e5212a353ad965be363149db634478c618196fe30c",
+  "sharedInitialPages": 16384,
+  "sharedMaximumPages": 20480,
+  "nativeWorkerCeiling": 8,
+  "asyncWorkPoolSize": 4,
+  "deadlineMs": 30000
+}

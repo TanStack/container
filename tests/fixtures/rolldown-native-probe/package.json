@@ -1,0 +1,9 @@
+{
+  "name": "isolated-native-rolldown-probe",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "rolldown": "1.2.9",
+    "@rolldown/binding-wasm32-wasi": "1.2.9"
+  }
+}

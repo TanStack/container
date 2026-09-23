@@ -1,0 +1,46 @@
+{
+  "format": 1,
+  "scope": "Pinned repository root listings for missing crate notice files, not exact linked-code evidence",
+  "unresolved": [
+    {
+      "crates": ["typedmap@0.6.0"],
+      "repository": "https://github.com/kodieg/typedmap/",
+      "revision": "0168ea19785b159589adc2619bc6cac66bf9974f",
+      "declaredLicense": "MIT OR Apache-2.0",
+      "licenseFile": null,
+      "cargoTomlSHA256": "ac731bb7cb4ad77bb6887a0ae33dccdb50712010a6bd7973566ef918effc1947",
+      "readmeSHA256": "c3efc5de26f3f8e158086f38e4c1cc2acfee3287c7c591ac3ec0928fcc54c117",
+      "sourceTreeSHA256": "4d82a01bbc9ba404cec9f13430e462cfd29fd3dbfa77a131dc378f0516275e0b",
+      "textReview": "README links to absent LICENSE-APACHE and LICENSE-MIT files and names the two SPDX choices, but does not contain either full license text. No license text or copyright header was found in the packaged source files.",
+      "rootEntries": [".github", ".gitignore", "CHANGELOG.md", "Cargo.toml", "README.md", "src"],
+      "rootContentsResponseSHA256": "39b5139e1403e0a3fa1c76765aa35529375a11bbb4bba4f34cd7e15618bfa0fb"
+    },
+    {
+      "crates": ["base-encode@0.3.1"],
+      "repository": "https://github.com/janispritzkau/rust-base-encode",
+      "revision": "41bdeb57488beec4ed63180e848ce1e99fba227d",
+      "declaredLicense": "MIT",
+      "licenseFile": null,
+      "cargoTomlSHA256": "0efccc27c62ed7700b20b9761285bf511f84a9a5a4284e2c03b6c829124aff96",
+      "readmeSHA256": "e5821ac0ee1915db1b6e019c3bd0adc3f7d21397cf04c0ed79477a1886b05c71",
+      "sourceTreeSHA256": "6940e948bd066a7c3f2953ba794069996e06329a0a5efd7a47a49b13678a5d8c",
+      "textReview": "No license text or copyright header was found in the packaged README or source files.",
+      "rootEntries": [".gitignore", "Cargo.toml", "README.md", "examples", "src"],
+      "rootContentsResponseSHA256": "7c0420d4193eb673b0a8a1a0ad9ba697bf43b71e1b309b993a28bce31b7006b0"
+    },
+    {
+      "crates": ["escape-simd@0.1.0", "json-escape-simd@3.1.2"],
+      "repository": "https://github.com/napi-rs/escape-simd",
+      "revision": "4f54347555d2f520ac38b406cf69ff66d9570a57",
+      "declaredLicense": "MIT",
+      "licenseFile": null,
+      "packageInputs": [
+        {"name": "escape-simd@0.1.0", "cargoTomlSHA256": "d13c4c63e84a1be60e03262cf2b6ba21c7c9f2dc9369ad38949225ad14df5fde", "readmeSHA256": "cde82b30317f1fae0cdd0b1173d1f5413a94bad4c5c79ffbbbc48a8f8d45a8cd", "sourceTreeSHA256": "292a9e453b77c356d4c3a2ea715b652a852efc9e577f83c1f92acf99dfcf45de"},
+        {"name": "json-escape-simd@3.1.2", "cargoTomlSHA256": "bec72e28cf2857d4d7634b383ab54b1df45914e89a0c6b741f7410fd97b15594", "readmeSHA256": "1706879bfe76f206661f77e9e36457507534cc74258f82cac237bf23e5118a69", "sourceTreeSHA256": "9281fc6daa18f2fa61ad40c54dba40ee79f849c6e41d347950cc88788a035c76"}
+      ],
+      "textReview": "No license text or copyright header was found in either packaged README or source tree.",
+      "rootEntries": [".github", ".gitignore", ".yarn", ".yarnrc.yml", "Cargo.lock", "Cargo.toml", "README.md", "cpu-features", "crates", "download-fixtures.js", "package.json", "yarn.lock"],
+      "rootContentsResponseSHA256": "ecd80d1177b10b5f7802a9f8fabca3b1c174092ca5fdceb08c671c4e76c6f4c8"
+    }
+  ]
+}

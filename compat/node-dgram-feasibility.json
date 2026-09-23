@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "feature": "node:dgram",
+  "status": "implemented-sandbox-local",
+  "implemented": true,
+  "browserOnly": true,
+  "decision": "A sandbox-local UDP subset is implemented on a distinct per-kernel packet transport. It cannot reach operating-system or external UDP.",
+  "truthfulLocalSurface": [
+    "createSocket udp4 and udp6",
+    "bind to a sandbox-local address and virtual port",
+    "atomic send delivery without stream connection state",
+    "message events with copied payload and virtual rinfo",
+    "close",
+    "address",
+    "addMembership and dropMembership for sandbox-local virtual multicast groups"
+  ],
+  "membershipBoundary": "Membership can be truthful only as membership in a per-kernel virtual multicast group. Interface selection must be omitted or use a documented virtual interface. Source-specific membership requires separate group and source routing state before it can be exposed.",
+  "mustReject": [
+    "external hosts and operating-system UDP",
+    "broadcast to host or LAN interfaces",
+    "real interface names and addresses",
+    "source-specific membership until virtual source routing exists",
+    "fd-backed socket options"
+  ],
+  "architecture": "VirtualDatagramNetwork is owned by the kernel worker and is separate from VirtualNetwork streams. It provides endpoint bind tables, ephemeral ports, copied atomic packet queues, virtual rinfo, process-owner cleanup, reference tracking and virtual multicast membership sets.",
+  "resourceCounters": ["datagrams.handles", "datagrams.bound"]
+}

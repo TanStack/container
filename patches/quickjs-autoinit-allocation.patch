@@ -1,0 +1,50 @@
+diff --git a/quickjs/quickjs.c b/quickjs/quickjs.c
+--- a/quickjs/quickjs.c
++++ b/quickjs/quickjs.c
+@@ -7827,6 +7827,7 @@
+     JSContext *realm;
+     JSAutoInitFunc *func;
+     JSAutoInitIDEnum id;
++    JSVarRef *global_ref = NULL;
+     
+     if (js_shape_prepare_update(ctx, p, &prs))
+         return -1;
+@@ -7836,11 +7837,19 @@
+     func = js_autoinit_func_table[id];
+     /* 'func' shall not modify the object properties 'pr' */
+     val = func(realm, p, prop, pr->u.init.opaque);
++    if (JS_IsException(val))
++        return -1;
++    if (p->class_id == JS_CLASS_GLOBAL_OBJECT &&
++        !(id == JS_AUTOINIT_ID_MODULE_NS && JS_VALUE_GET_TAG(val) == JS_TAG_STRING)) {
++        global_ref = js_create_var_ref(ctx, FALSE);
++        if (!global_ref) {
++            JS_FreeValue(ctx, val);
++            return -1;
++        }
++    }
+     js_autoinit_free(ctx->rt, pr);
+     prs->flags &= ~JS_PROP_TMASK;
+     pr->u.value = JS_UNDEFINED;
+-    if (JS_IsException(val))
+-        return -1;
+     if (id == JS_AUTOINIT_ID_MODULE_NS &&
+         JS_VALUE_GET_TAG(val) == JS_TAG_STRING) {
+         /* WARNING: a varref is returned as a string  ! */
+@@ -7850,13 +7860,8 @@
+         pr->u.var_ref = JS_VALUE_GET_PTR(val);
+         pr->u.var_ref->header.ref_count++;
+     } else if (p->class_id == JS_CLASS_GLOBAL_OBJECT) {
+-        JSVarRef *var_ref;
+-        /* in the global object we use references */
+-        var_ref = js_create_var_ref(ctx, FALSE);
+-        if (!var_ref)
+-            return -1;
+         prs->flags |= JS_PROP_VARREF;
+-        pr->u.var_ref = var_ref;
+-        var_ref->value = val; 
+-        var_ref->is_const = !(prs->flags & JS_PROP_WRITABLE);
++        pr->u.var_ref = global_ref;
++        global_ref->value = val;
++        global_ref->is_const = !(prs->flags & JS_PROP_WRITABLE);
+     } else {

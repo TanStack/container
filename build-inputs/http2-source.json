@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "id": "nghttp2",
+  "version": "1.70.0",
+  "archive": {
+    "url": "https://github.com/nghttp2/nghttp2/releases/download/v1.70.0/nghttp2-1.70.0.tar.bz2",
+    "sha256": "8faca1f78aa99ac3bc1768a76b7e0f6b36d8e6a62c13818751b1d205f02f9405"
+  },
+  "license": {
+    "path": "COPYING",
+    "sha256": "6b94f3abc1aabd0c72a7c7d92a77f79dda7c8a0cb3df839a97890b4116a2de2a"
+  },
+  "inputs": {
+    "sourceDirectory": "lib",
+    "sourceExtension": ".c",
+    "headerDirectory": "lib",
+    "headerExtension": ".h",
+    "fileCount": 55,
+    "sha256": "add70515c0c9b114a90a70a4450719edafad3bc81efd1365c1383274e6db58a0"
+  }
+}

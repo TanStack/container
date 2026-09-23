@@ -1,0 +1,103 @@
+{
+  "format": 1,
+  "scope": "Attribution for the pinned Rust standard library and WASI SDK inputs used to build the Rolldown WASM binding. This is not proof of exact linked objects.",
+  "rolldown": {
+    "version": "1.2.9",
+    "sourceRevision": "5b4746e442989d770c606ce08d2737e6aafbd25d",
+    "bindingWasmSHA256": "629aa10c37a9920cd5729a35af148983c881f4ff9edd6368a7d63b5acbf89dc2"
+  },
+  "rust": {
+    "version": "1.98.1",
+    "revision": "48a229ceaefd4985c50990b14116b6d856af0985",
+    "distributionDate": "2026-09-03",
+    "manifest": {
+      "url": "https://static.rust-lang.org/dist/channel-rust-1.98.1.toml",
+      "sha256": "a7c8774a5fd8441c997d94c029776cbc5eb111e9d72ab5d256fa69866644347e"
+    },
+    "compilerArchive": {
+      "url": "https://static.rust-lang.org/dist/2026-09-03/rustc-1.98.1-aarch64-unknown-linux-gnu.tar.xz",
+      "sha256": "89fb83041993b48816514815606f53a5264729b8b449671a6b291e6f0ae74f40"
+    },
+    "standardLibraryArchive": {
+      "target": "wasm32-wasip1-threads",
+      "url": "https://static.rust-lang.org/dist/2026-09-03/rust-std-1.98.1-wasm32-wasip1-threads.tar.xz",
+      "sha256": "d4bbde929a1a0bc2c36049222c2ed8ea2e3e52b3a73392e597bca1818c8ab3d5"
+    },
+    "builder": {
+      "path": "src/ci/docker/host-x86_64/dist-various-2/Dockerfile",
+      "url": "https://raw.githubusercontent.com/rust-lang/rust/48a229ceaefd4985c50990b14116b6d856af0985/src/ci/docker/host-x86_64/dist-various-2/Dockerfile",
+      "sha256": "8c3e4c7259a10258e66d075e39186894b745febf75b9103daa4096c23b00165a",
+      "wasiSDKVersion": "33.0"
+    }
+  },
+  "wasiSDK": {
+    "tag": "wasi-sdk-33",
+    "tagObject": "b34e4c813e72ccc2e7d6bafcacb99dd964586e00",
+    "revision": "c10c0507deb3e5aad506f1f9f32084e49a21834b",
+    "linuxX8664ArchiveSHA256": "0ba8b5bfaeb2adf3f29bab5841d76cf5318ab8e1642ea195f88baba1abd47bce",
+    "wasiLibcRevision": "161b3195fc2558d2b1ba3eb9ffae3b2b47407623",
+    "llvmRevision": "4434dabb69916856b824f68a64b029c67175e532"
+  },
+  "notices": [
+    {
+      "path": "licenses/upstream/rust-1.98.1-COPYRIGHT-library.html",
+      "sha256": "68129500b616d5838629e68f55ff3aed5e096dacf60ce9eb41bbe599a563afa6",
+      "source": "rustc/share/doc/rust/COPYRIGHT-library.html"
+    },
+    {
+      "path": "licenses/upstream/rust-1.98.1-LICENSE-APACHE",
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "source": "rustc-1.98.1-aarch64-unknown-linux-gnu/LICENSE-APACHE"
+    },
+    {
+      "path": "licenses/upstream/rust-1.98.1-LICENSE-MIT",
+      "sha256": "b71bd43a069ca0641a9ecfe585ca7b3c53b5cc1608f8b68321168698e28b5ea1",
+      "source": "rustc-1.98.1-aarch64-unknown-linux-gnu/LICENSE-MIT"
+    },
+    {
+      "path": "licenses/upstream/wasi-libc-161b3195-LICENSE",
+      "sha256": "2711a8b5a5cdfef0e639f96c1aca12ae23d7d64a02d0507f1bdf14d2b27bbc3a",
+      "source": "https://raw.githubusercontent.com/WebAssembly/wasi-libc/161b3195fc2558d2b1ba3eb9ffae3b2b47407623/LICENSE"
+    },
+    {
+      "path": "licenses/upstream/wasi-libc-161b3195-LICENSE-APACHE-LLVM",
+      "sha256": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+      "source": "https://raw.githubusercontent.com/WebAssembly/wasi-libc/161b3195fc2558d2b1ba3eb9ffae3b2b47407623/LICENSE-APACHE-LLVM"
+    },
+    {
+      "path": "licenses/upstream/wasi-libc-161b3195-LICENSE-APACHE",
+      "sha256": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+      "source": "https://raw.githubusercontent.com/WebAssembly/wasi-libc/161b3195fc2558d2b1ba3eb9ffae3b2b47407623/LICENSE-APACHE"
+    },
+    {
+      "path": "licenses/upstream/wasi-libc-161b3195-LICENSE-MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3",
+      "source": "https://raw.githubusercontent.com/WebAssembly/wasi-libc/161b3195fc2558d2b1ba3eb9ffae3b2b47407623/LICENSE-MIT"
+    },
+    {
+      "path": "licenses/upstream/wasi-libc-161b3195-cloudlibc-LICENSE",
+      "sha256": "c8b789cf5a746611e6300a0cc7750dbf92b61912a709d04e639245f7290656d0",
+      "source": "https://raw.githubusercontent.com/WebAssembly/wasi-libc/161b3195fc2558d2b1ba3eb9ffae3b2b47407623/libc-bottom-half/cloudlibc/LICENSE"
+    },
+    {
+      "path": "licenses/upstream/wasi-libc-161b3195-musl-COPYRIGHT",
+      "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+      "source": "https://raw.githubusercontent.com/WebAssembly/wasi-libc/161b3195fc2558d2b1ba3eb9ffae3b2b47407623/libc-top-half/musl/COPYRIGHT"
+    },
+    {
+      "path": "licenses/upstream/wasi-libc-161b3195-musl-fts-COPYING",
+      "sha256": "55af87e4017668f54467a3380e7ebbac5e672d8c763bfe95e6fc882a6fdc4046",
+      "source": "https://raw.githubusercontent.com/WebAssembly/wasi-libc/161b3195fc2558d2b1ba3eb9ffae3b2b47407623/fts/musl-fts/COPYING"
+    },
+    {
+      "path": "licenses/upstream/wasi-libc-161b3195-allocator-NOTICES",
+      "sha256": "8fa9a47345454c2a015c1ae6556dac5e2fc83dca006b1bd2e107b2ec253de03c",
+      "source": "Exact notice paragraphs from pinned dlmalloc/src/malloc.c and emmalloc/emmalloc.c; full source hashes are recorded in the file."
+    },
+    {
+      "path": "licenses/upstream/llvm-4434dabb-LICENSE.txt",
+      "sha256": "8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee",
+      "source": "https://raw.githubusercontent.com/llvm/llvm-project/4434dabb69916856b824f68a64b029c67175e532/llvm/LICENSE.TXT"
+    }
+  ]
+}

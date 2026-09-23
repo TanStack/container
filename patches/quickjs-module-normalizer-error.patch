@@ -1,0 +1,21 @@
+diff --git a/c/interface.c b/c/interface.c
+index ff68294..8a7cae5 100644
+--- a/c/interface.c
++++ b/c/interface.c
+@@ -1362,6 +1362,9 @@ char *qts_normalize_module(JSContext *ctx, const char *module_base_name, const c
+     qts_log(msg);
+   }
+   char *em_module_name = qts_host_normalize_module(rt, ctx, module_base_name, module_name);
++  if (em_module_name == NULL) {
++    return NULL;
++  }
+   char *js_module_name = js_strdup(ctx, em_module_name);
+   free(em_module_name);
+   return js_module_name;
+@@ -1399,4 +1402,4 @@ JSValue *QTS_bjson_decode(JSContext *ctx, JSValueConst *data) {
+ 
+   JSValue value = JS_ReadObject(ctx, buffer, length, 0);
+   return jsvalue_to_heap(value);
+-}
+\ No newline at end of file
++}

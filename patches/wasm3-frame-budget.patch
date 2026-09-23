@@ -1,0 +1,118 @@
+diff --git a/source/m3_env.h b/source/m3_env.h
+--- a/source/m3_env.h
++++ b/source/m3_env.h
+@@ -405,6 +405,7 @@
+     IM3Function    lastCalled;     // last function that successfully executed
+ 
+     void*          userdata;
++    u32            activeFrames;  // bounds retained interpreter frames on Wasm hosts
+ 
+     u32            memoryLimit;
+ 
+diff --git a/source/m3_exec.h b/source/m3_exec.h
+--- a/source/m3_exec.h
++++ b/source/m3_exec.h
+@@ -126,6 +126,23 @@
+ #endif
+ 
+ 
++// The host Wasm call stack is separate from its linear-memory C stack.
++// Count frames retained across inner dispatch, including nested loops.
++#ifndef d_m3MaxActiveFrames
++#  define d_m3MaxActiveFrames 256
++#endif
++#define d_m3FrameEnter()                                                   \
++    do {                                                                  \
++        if (m3MemRuntime (_mem)->activeFrames >= d_m3MaxActiveFrames)        \
++            newTrap ("[trap] stack overflow (interpreter frame limit)");    \
++        m3MemRuntime (_mem)->activeFrames++;                               \
++    } while (0)
++#define d_m3FrameLeave()                                                   \
++    do {                                                                  \
++        m3MemRuntime (_mem)->activeFrames--;                               \
++    } while (0)
++
++
+ #if d_m3EnableStrace == 1
+ // Flat trace
+ #  define d_m3TracePrepare
+@@ -732,6 +748,7 @@
+ 
+     m3stack_t sp = _sp + stackOffset;
+ 
++    d_m3FrameEnter();
+ #if (d_m3EnableOpProfiling || d_m3EnableOpTracing)
+     m3ret_t r = Call(callPC, sp, _mem, d_m3OpDefaultArgs, d_m3BaseCstr);
+ #else
+@@ -739,6 +756,7 @@
+ #endif
+ 
+     _mem = memory->mallocated;
++    d_m3FrameLeave();
+ 
+     if (M3_LIKELY(not r)) {
+         nextOp();
+@@ -771,6 +789,7 @@
+             }
+ 
+             if (M3_LIKELY(not r)) {
++                d_m3FrameEnter();
+ #if (d_m3EnableOpProfiling || d_m3EnableOpTracing)
+                 r = Call(function->compiled, sp, _mem, d_m3OpDefaultArgs, d_m3BaseCstr);
+ #else
+@@ -778,6 +797,7 @@
+ #endif
+ 
+                 _mem = memory->mallocated;
++                d_m3FrameLeave();
+ 
+                 if (M3_LIKELY(not r)) {
+                     nextOpDirect();
+@@ -842,6 +862,7 @@
+                     // a table may hold functions from another module, and those
+                     // run against their own module's memory
+                     M3MemoryHeader* calleeMem = Module_MemoryHeader(function->module);
++                    d_m3FrameEnter();
+ 
+ #if (d_m3EnableOpProfiling || d_m3EnableOpTracing)
+                     r = Call(function->compiled, sp, calleeMem, d_m3OpDefaultArgs, d_m3BaseCstr);
+@@ -851,6 +872,7 @@
+ #endif
+ 
+                     _mem = memory->mallocated;
++                    d_m3FrameLeave();
+ 
+                     if (M3_LIKELY(not r)) {
+                         nextOpDirect();
+@@ -1654,6 +1676,7 @@
+ 
+     IM3Memory   memory = m3MemInfo(_mem);
+ 
++    d_m3FrameEnter();
+     do {
+ #if d_m3EnableStrace >= 3
+         d_m3TracePrint("iter {");
+@@ -1671,6 +1694,7 @@
+         // can potentially invoke the grow operation.
+         _mem = memory->mallocated;
+     } while (r == _pc);
++    d_m3FrameLeave();
+ 
+     forwardTrap(r);
+ }
+@@ -1705,6 +1729,7 @@
+ 
++    d_m3FrameEnter();
+     u32        depth = ++runtime->tryDepth;
+ 
+     m3ret_t    r = jumpOpImpl(body);
+ 
+     // the body can have grown linear memory out from under us
+@@ -1712,6 +1737,7 @@
+ 
+     // control is leaving this frame for good, so this try is done either way
+     bool isInnermost = (runtime->tryDepth == depth);
++    d_m3FrameLeave();
+     runtime->tryDepth = depth - 1;
+ 
+     if (M3_UNLIKELY(r == m3Err_pendingException) and isInnermost) {

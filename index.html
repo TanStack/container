@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Browser Runtime Spike</title>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Browser runtime spike</h1>
+        <output id="status" data-state="loading">Starting…</output>
+      </header>
+
+      <section class="workspace">
+        <label class="editor-label" for="source">/src/server.ts</label>
+        <textarea id="source" spellcheck="false" autocomplete="off"></textarea>
+      </section>
+
+      <form id="request-form">
+        <label for="request-path">Request path</label>
+        <input id="request-path" value="/hello/web-container" />
+        <button id="compile" type="button">Compile and load</button>
+        <button id="vite-smoke" type="button">Run Vite build</button>
+        <button id="load-start" type="button">Build Start app</button>
+        <button id="request" type="submit">Send request</button>
+      </form>
+
+      <section class="response-panel">
+        <div>
+          <span>Response</span>
+          <output id="timing"></output>
+        </div>
+        <pre id="response">No request sent.</pre>
+        <iframe id="preview" title="Rendered server response" sandbox hidden></iframe>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

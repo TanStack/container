@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "feature": "node:sqlite",
+  "status": "implemented-with-guest-wasm",
+  "checkedApi": [
+    "DatabaseSync",
+    "StatementSync"
+  ],
+  "assets": {
+    "implementation": "sql.js 1.14.2",
+    "javascript": "fixtures/workloads/node_modules/sql.js/dist/sql-wasm.js",
+    "wasm": "fixtures/workloads/node_modules/sql.js/dist/sql-wasm.wasm",
+    "staged": true
+  },
+  "evidence": {
+    "sqlJsFactoryWithWasmBinary": "returns-promise",
+    "modulePreloadResult": "source-text-only",
+    "builtinArtifactFormat": "commonjs",
+    "builtinEvaluation": "synchronous",
+    "guestWasmInstantiation": "available-after-async-factory-initialization"
+  },
+  "boundary": "The current module preparation API can await source loading but does not evaluate modules or initialize WASM. Runtime builtins are transformed to CommonJS and evaluated synchronously. sql.js returns a Promise even when the complete wasmBinary is already in memory, so DatabaseSync cannot truthfully construct synchronously before a separate initialization stage has completed.",
+  "smallestArchitecturalChange": {
+    "component": "kernel process runner",
+    "change": "Add an awaited per-context builtin preparation stage after the guest module loader is installed and before the entry module is evaluated. Package the pinned sql.js source and WASM as runtime assets, invoke and await the sql.js factory in the guest context during that stage, then retain its initialized SQL namespace for a synchronous node:sqlite CommonJS builtin.",
+    "preservesPublicContract": "After preparation, importing node:sqlite and calling new DatabaseSync(':memory:') remain synchronous.",
+    "notSufficient": [
+      "preloadModuleSources without module evaluation",
+      "starting sql.js initialization from the DatabaseSync constructor",
+      "returning a Promise from DatabaseSync"
+    ]
+  },
+  "resolution": "The kernel runtime artifact now declares awaited builtin preparations. SQLite preparation runs before entry code, initializes the packaged sql.js WASM once in that QuickJS context, and stores the namespace used by the synchronous CommonJS facade. The default engine reports that guestWasm is required.",
+  "implemented": true
+}

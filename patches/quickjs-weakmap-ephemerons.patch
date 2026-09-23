@@ -1,0 +1,157 @@
+--- a/quickjs/quickjs.c
++++ b/quickjs/quickjs.c
+@@ -1039,6 +1039,7 @@
+ typedef struct JSMapRecord {
+     int ref_count; /* used during enumeration to avoid freeing the record */
+     BOOL empty : 8; /* TRUE if the record is deleted */
++    BOOL gc_active : 8; /* weak entry activated in the current GC scan */
+     struct list_head link;
+     struct JSMapRecord *hash_next;
+     JSValue key;
+@@ -1348,6 +1349,7 @@
+ static JSValue js_object_groupBy(JSContext *ctx, JSValueConst this_val,
+                                  int argc, JSValueConst *argv, int is_map);
+ static void map_delete_weakrefs(JSRuntime *rt, JSWeakRefHeader *wh);
++static void gc_remove_dead_map_entries(JSRuntime *rt);
+ static void weakref_delete_weakref(JSRuntime *rt, JSWeakRefHeader *wh);
+ static void finrec_delete_weakref(JSRuntime *rt, JSWeakRefHeader *wh);
+ static void JS_RunGCInternal(JSRuntime *rt, BOOL remove_weak_objects);
+@@ -6349,6 +6351,43 @@
+ static void gc_scan_incref_child2(JSRuntime *rt, JSGCObjectHeader *p)
+ {
+     p->ref_count++;
++}
++
++/* A weak entry is an ephemeron: its value is reachable only when both
++   the map and its key are reachable. Symbol keys are conservatively
++   retained here because symbols are reference counted outside this
++   collector's object graph. */
++static BOOL gc_scan_weak_maps(JSRuntime *rt, BOOL restore_inactive)
++{
++    struct list_head *el, *entry;
++    BOOL changed = FALSE;
++
++    list_for_each(el, &rt->gc_obj_list) {
++        JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
++        JSObject *p;
++        JSMapState *s;
++        if (gp->gc_obj_type != JS_GC_OBJ_TYPE_JS_OBJECT)
++            continue;
++        p = (JSObject *)gp;
++        if (p->class_id != JS_CLASS_WEAKMAP || !p->u.map_state)
++            continue;
++        s = p->u.map_state;
++        list_for_each(entry, &s->records) {
++            JSMapRecord *mr = list_entry(entry, JSMapRecord, link);
++            if (mr->empty || mr->gc_active)
++                continue;
++            if (restore_inactive) {
++                JS_MarkValue(rt, mr->value, gc_scan_incref_child2);
++            } else if (!JS_IsObject(mr->key) ||
++                       (!JS_VALUE_GET_OBJ(mr->key)->free_mark &&
++                        JS_VALUE_GET_OBJ(mr->key)->header.mark == 0)) {
++                mr->gc_active = TRUE;
++                JS_MarkValue(rt, mr->value, gc_scan_incref_child);
++                changed = TRUE;
++            }
++        }
++    }
++    return changed;
+ }
+ 
+ static void gc_scan(JSRuntime *rt)
+@@ -6356,13 +6395,28 @@
+     struct list_head *el;
+     JSGCObjectHeader *p;
+ 
+-    /* keep the objects with a refcount > 0 and their children. */
+-    list_for_each(el, &rt->gc_obj_list) {
+-        p = list_entry(el, JSGCObjectHeader, link);
+-        assert(p->ref_count > 0);
+-        p->mark = 0; /* reset the mark for the next GC call */
+-        mark_children(rt, p, gc_scan_incref_child);
++    /* Trace strong edges, then activate weak entries to a fixed point.
++       Activating an entry can append new objects, including other keys
++       and WeakMaps. Each strong edge and each active value is restored
++       exactly once. No allocation is needed during collection. */
++    el = rt->gc_obj_list.next;
++    for (;;) {
++        while (el != &rt->gc_obj_list) {
++            p = list_entry(el, JSGCObjectHeader, link);
++            assert(p->ref_count > 0);
++            p->mark = 0;
++            mark_children(rt, p, gc_scan_incref_child);
++            el = el->next;
++        }
++        el = rt->gc_obj_list.prev;
++        if (!gc_scan_weak_maps(rt, FALSE))
++            break;
++        el = el->next;
+     }
++
++    /* Inactive values still have an owning reference until their entry
++       is removed in the sweep phase, even if the map itself is live. */
++    gc_scan_weak_maps(rt, TRUE);
+ 
+     /* restore the refcount of the objects to be deleted. */
+     list_for_each(el, &rt->tmp_obj_list) {
+@@ -6380,6 +6434,10 @@
+ #endif
+ 
+     rt->gc_phase = JS_GC_PHASE_REMOVE_CYCLES;
++
++    /* Drop inactive entries before freeing their values. The sweep phase
++       defers zero-ref object destruction, preserving the GC lists. */
++    gc_remove_dead_map_entries(rt);
+ 
+     for(;;) {
+         el = rt->tmp_obj_list.next;
+@@ -51519,6 +51577,35 @@
+             /* remove from the hash table */
+             *pmr = mr1->hash_next;
+         done:
++            map_delete_record_internal(rt, s, mr);
++        }
++    }
++}
++
++static void gc_remove_dead_map_entries(JSRuntime *rt)
++{
++    struct list_head *el, *entry, *next;
++
++    list_for_each(el, &rt->gc_obj_list) {
++        JSGCObjectHeader *gp = list_entry(el, JSGCObjectHeader, link);
++        JSObject *p;
++        JSMapState *s;
++        if (gp->gc_obj_type != JS_GC_OBJ_TYPE_JS_OBJECT)
++            continue;
++        p = (JSObject *)gp;
++        if (p->class_id != JS_CLASS_WEAKMAP || !p->u.map_state)
++            continue;
++        s = p->u.map_state;
++        list_for_each_safe(entry, next, &s->records) {
++            JSMapRecord *mr = list_entry(entry, JSMapRecord, link);
++            JSMapRecord **slot;
++            if (mr->empty || mr->gc_active)
++                continue;
++            slot = &s->hash_table[map_hash_key(mr->key, s->hash_bits)];
++            while (*slot && *slot != mr)
++                slot = &(*slot)->hash_next;
++            if (*slot)
++                *slot = mr->hash_next;
+             map_delete_record_internal(rt, s, mr);
+         }
+     }
+@@ -51896,6 +51983,12 @@
+             mr = list_entry(el, JSMapRecord, link);
+             if (!s->is_weak)
+                 JS_MarkValue(rt, mr->key, mark_func);
++            if (s->is_weak) {
++                if (mark_func == gc_decref_child)
++                    mr->gc_active = FALSE;
++                if (mark_func == gc_scan_incref_child)
++                    continue;
++            }
+             JS_MarkValue(rt, mr->value, mark_func);
+         }
+     }

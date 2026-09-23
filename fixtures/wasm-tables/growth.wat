@@ -1,0 +1,13 @@
+(module
+  (table $closed 0 0 funcref)
+  (table $bounded 0 2 funcref)
+  (table $open 0 funcref)
+  (func (export "closedGrow") (param i32) (result i32)
+    ref.null func local.get 0 table.grow $closed)
+  (func (export "closedSize") (result i32) table.size $closed)
+  (func (export "boundedGrow") (param i32) (result i32)
+    ref.null func local.get 0 table.grow $bounded)
+  (func (export "boundedSize") (result i32) table.size $bounded)
+  (func (export "openGrow") (param i32) (result i32)
+    ref.null func local.get 0 table.grow $open)
+  (func (export "openSize") (result i32) table.size $open))

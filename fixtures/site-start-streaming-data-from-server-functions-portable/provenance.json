@@ -1,0 +1,23 @@
+{
+  "source": "TanStack/router/examples/react/start-streaming-data-from-server-functions/package.json",
+  "sourceSHA256": "552ef82fc16bd2ff2068885f9fdb01d71ec467572625c1acad57d06d12469918",
+  "lockCommand": "npm install --package-lock-only --ignore-scripts --no-audit --no-fund --force",
+  "dependencySubstitutions": true,
+  "graphChanges": {
+    "dependencies": {
+      "@rolldown/binding-wasm32-wasi": "1.2.9",
+      "lightningcss": "npm:lightningcss-wasm@1.33.0"
+    },
+    "overrides": {
+      "rolldown": "1.2.9",
+      "lightningcss": "npm:lightningcss-wasm@1.33.0"
+    }
+  },
+  "env": {
+    "CI": "true",
+    "NAPI_RS_WASI_FLAVOR": "wasm32-wasi",
+    "NAPI_RS_FORCE_WASI": "error",
+    "NAPI_RS_ENFORCE_VERSION_CHECK": "1",
+    "NITRO_DEV_RUNNER": "self"
+  }
+}

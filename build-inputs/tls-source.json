@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "id": "mbedtls",
+  "version": "3.6.7",
+  "archive": {
+    "url": "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2",
+    "sha256": "a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6"
+  },
+  "license": {
+    "path": "LICENSE",
+    "sha256": "9b405ef4c89342f5eae1dd828882f931747f71001cfba7d114801039b52ad09b"
+  },
+  "inputs": {
+    "sourceDirectory": "library",
+    "sourceExtension": ".c",
+    "headerDirectory": "include",
+    "headerExtension": ".h",
+    "fileCount": 207,
+    "sha256": "2275f6c90681b61190e93b7958b773e9e596e886563252278c4db7fb4924041e"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "project": "Node.js",
+  "version": "24.15.0",
+  "upstream": "https://github.com/nodejs/node/blob/v24.15.0/lib/internal/util/inspect.js",
+  "extraction": "ANSI regular expression from the locally installed Node runtime source",
+  "license": "MIT",
+  "licenseFile": "../compiler/vendor/node24/LICENSE",
+  "adaptedSHA256": "4678a57ce40fdbd1fc5c03c2e4765ba4ce0ad9aaf1bce9fa0a8ed721205d6b64",
+  "changes": [
+    "Only the ANSI matcher is copied, not the complete inspect implementation.",
+    "The guest wrapper validates string arguments and calls the captured RegExp replacement intrinsic.",
+    "Invalid argument codes and types are preserved; full Node error messages are not reproduced."
+  ]
+}

@@ -1,0 +1,22 @@
+--- a/quickjs/quickjs-atom.h
++++ b/quickjs/quickjs-atom.h
+@@ -273,6 +273,8 @@
+ DEF(Symbol_hasInstance, "Symbol.hasInstance")
+ DEF(Symbol_species, "Symbol.species")
+ DEF(Symbol_unscopables, "Symbol.unscopables")
+ DEF(Symbol_asyncIterator, "Symbol.asyncIterator")
++DEF(Symbol_dispose, "Symbol.dispose")
++DEF(Symbol_asyncDispose, "Symbol.asyncDispose")
+ 
+ #endif /* DEF */
+--- a/quickjs/quickjs.c
++++ b/quickjs/quickjs.c
+@@ -51080,6 +51080,8 @@
+     JS_PROP_ATOM_DEF("species", JS_ATOM_Symbol_species, 0),
+     JS_PROP_ATOM_DEF("unscopables", JS_ATOM_Symbol_unscopables, 0),
+     JS_PROP_ATOM_DEF("asyncIterator", JS_ATOM_Symbol_asyncIterator, 0),
++    JS_PROP_ATOM_DEF("dispose", JS_ATOM_Symbol_dispose, 0),
++    JS_PROP_ATOM_DEF("asyncDispose", JS_ATOM_Symbol_asyncDispose, 0),
+ };
+ 
+ /* Set/Map/WeakSet/WeakMap */

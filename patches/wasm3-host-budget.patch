@@ -1,0 +1,15 @@
+diff --git a/source/m3_exec.h b/source/m3_exec.h
+--- a/source/m3_exec.h
++++ b/source/m3_exec.h
+@@ -1566,7 +1566,11 @@
+ #ifdef QJS_GUEST_WASM
+     extern int qwasm_poll(void);
++    extern int qwasm_has_interrupt_budget(void);
+     if (qwasm_poll()) newTrap("interrupted");
++    // The embedder owns execution policy when it installs an interrupt handler.
++    // Keep these poll sites, and retain gas as the fallback for other embeddings.
++    if (qwasm_has_interrupt_budget()) nextOp();
+ #endif
+     runtime->gasRemaining -= (i64)cost;
+ 
+     if (M3_UNLIKELY(runtime->gasRemaining < 0)) {

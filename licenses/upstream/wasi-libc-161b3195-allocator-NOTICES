@@ -1,0 +1,15 @@
+dlmalloc/src/malloc.c
+
+This is a version (aka dlmalloc) of malloc/free/realloc written by
+Doug Lea and released to the public domain, as explained at
+http://creativecommons.org/publicdomain/zero/1.0/
+
+Full source SHA-256: 9e7ce51d813331ae87ef235f6ca2d5ce2167692e30bb51a173513e3754a67f8f
+
+emmalloc/emmalloc.c
+
+Copyright 2018 The Emscripten Authors.  All rights reserved.
+Emscripten is available under two separate licenses, the MIT license and the
+University of Illinois/NCSA Open Source License.
+
+Full source SHA-256: c5b52c424c9101ba9b2d1338997e1758c9fdf369ab0450d9b72e9544fe482166

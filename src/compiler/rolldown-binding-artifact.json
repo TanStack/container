@@ -1,0 +1,8 @@
+{
+  "version": "1.2.9",
+  "entry": "rolldown-binding.wasi.cjs",
+  "hashes": {
+    "package.json": "363d1db0d1431266551164ae9aa85bbefdcbf798ec68e30d833ca70903a3c13c",
+    "rolldown-binding.wasi.cjs": "5f4ad0a90dd97b1e5d96517c31068575a6e7b6163a54172a8d39b9753d2b2457"
+  }
+}

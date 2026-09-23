@@ -1,0 +1,11 @@
+--- a/source/m3_exec.h
++++ b/source/m3_exec.h
+@@ -1383,7 +1383,7 @@
+     void*    value = slot(void*);
+ 
+     u32      oldSize = table->size;
+-    u32      maxSize = table->maxSize ? table->maxSize : d_m3MaxSaneTableSize;
++    u32      maxSize = table->hasMax ? table->maxSize : d_m3MaxSaneTableSize;
+ 
+     // a table64 delta is a whole u64, so the sum is formed only once it is
+     // known to fit

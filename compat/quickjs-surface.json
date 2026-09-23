@@ -1,0 +1,28 @@
+{
+  "scope": "Original QuickJS workspace backend, not the newer WorkerKernel. Current WorkerKernel evidence is in reports/workload-matrix.json and reports/workload-summary.md.",
+  "engine": "quickjs-emscripten-core@0.32.0",
+  "variant": "@jitl/quickjs-wasmfile-release-sync@0.32.0",
+  "verifiedEngines": ["chromium", "firefox", "playwright-webkit"],
+  "status": {
+    "workspaceExecution": "bundled-esm-through-top-level-await",
+    "typescriptAndRelativeImports": "host-compiler-worker",
+    "npmCommonJs": "verified-is-number-7.0.0-only",
+    "fsPromises": ["readFile-utf8-and-bytes", "writeFile-utf8-and-bytes", "readdir-no-options", "stat-kind-and-size"],
+    "process": ["explicit-env", "argv", "partial-shim"],
+    "pendingHostPromises": "bounded-job-pump-and-message-rpc",
+    "workspaceClose": "terminates-vm-worker",
+    "readOnlyAndPathAuthority": "enforced-in-host",
+    "checkpoint": "files-only-via-workspace-indexeddb",
+    "cpuLimit": "quickjs-interrupt-plus-host-worker-timeout",
+    "memoryLimit": "quickjs-allocator-only-not-total-browser-memory",
+    "ambientNetworkAndBrowserApis": "not-exposed",
+    "timers": "not-implemented",
+    "fetchRequestResponse": "not-implemented",
+    "nodeEventLoopExit": "not-implemented",
+    "asyncLocalStorage": "existing-partial-shim-not-node-conformant",
+    "tanstackStartInVm": "not-tested-not-supported",
+    "unbundledRuntimeModuleLoading": "not-implemented",
+    "hostileCodeSecurityAudit": "not-done",
+    "realIosDevice": "not-tested"
+  }
+}

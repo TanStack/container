@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sandbox feasibility lab</title>
+  </head>
+  <body>
+    <h1>Sandbox feasibility lab</h1>
+    <p>Experimental. Do not use sensitive projects or credentials.</p>
+    <nav aria-label="Probes">
+      <button id="run">Run scripted agent workflow</button>
+      <button id="start-probe">Run Start app</button>
+      <button id="vm-workflow">Run workflow in QuickJS</button>
+      <button id="vm-probe">Probe VM limits</button>
+      <button id="compatibility">Run feasibility suite</button>
+      <button id="engine-als">Test native QuickJS ALS</button>
+      <button id="combined-engine">Test combined VM + Start</button>
+      <button id="worker-kernel">Test worker-owned VM</button>
+      <button id="workloads">Test package workloads</button>
+      <a href="/">Original runtime spike</a>
+    </nav>
+    <p id="combined-warning">Combined VM + Start can exhaust WebKit memory after finishing. Desktop stability is not yet established.</p>
+    <div class="panels">
+      <pre id="output" aria-live="polite">Ready</pre>
+      <div id="preview"></div>
+    </div>
+    <script type="module" src="/src/sandbox/lab.ts"></script>
+  </body>
+</html>

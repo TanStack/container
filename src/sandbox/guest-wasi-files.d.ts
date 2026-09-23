@@ -1,0 +1,1 @@
+export function createWASIFileSystem(fs: any, preopens: Record<string,string>, getMemory:()=>{buffer:ArrayBufferLike}): {imports:Record<string,(...args:any[])=>number>;poll(fd:number,type:number):{error:number;nbytes?:bigint;flags?:number};close():void}

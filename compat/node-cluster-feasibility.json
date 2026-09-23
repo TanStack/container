@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "feature": "node:cluster",
+  "status": "implemented-sandbox-local",
+  "implemented": true,
+  "browserOnly": true,
+  "decision": "Expose process-backed cluster lifecycle, IPC and deterministic SCHED_RR distribution for sandbox-local virtual TCP and HTTP listeners. No operating-system socket is opened.",
+  "sharedListeners": true,
+  "processMapping": {
+    "backend": "GuestProcesses JavaScript child processes with advanced IPC",
+    "mustNotUse": "node:worker_threads",
+    "implementedAPIs": [
+      "fork",
+      "workers",
+      "Worker.send",
+      "Worker.disconnect",
+      "Worker.kill",
+      "Worker.isConnected",
+      "Worker.isDead",
+      "online",
+      "message",
+      "disconnect",
+      "exit"
+    ],
+    "reason": "Node cluster workers are process identities with process.env, process.pid and process IPC semantics. The sandbox already models those properties in GuestProcesses."
+  },
+  "unsupported": [
+    "SCHED_NONE operating-system scheduling behavior",
+    "OS process and external socket claims"
+  ],
+  "listenerBroker": "The kernel-owned VirtualNetwork groups sibling cluster listener handles by primary process identity and port. It accepts each virtual connection once, dispatches in deterministic SCHED_RR order, removes closed or exited workers, and deletes the broker when its final listener closes.",
+  "resourceAccounting": {
+    "network.listeners": "logical bound ports, including one shared cluster broker per port",
+    "network.handles": "worker listener handles plus accepted and client virtual sockets"
+  },
+  "nativeRequestDistributionControl": {
+    "status": "not-run",
+    "reason": "Native Node cluster distribution requires binding an operating-system loopback socket. This task forbids host socket use, so request distribution is proven by the deterministic VirtualNetwork architecture test while the native fixture covers process event ordering without network I/O."
+  },
+  "explicitRejections": ["operating-system handles", "external listeners", "real CPU scheduling", "unsupported setupPrimary options"]
+}

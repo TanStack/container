@@ -1,0 +1,6 @@
+{
+  "source": "TanStack/router/examples/react/start-counter/package.json",
+  "sourceSHA256": "b9d633c63fad9dd1e17b2bf326659b560a584dd8bf4c74b06bca32a5dc2a1ff5",
+  "lockCommand": "npm install --package-lock-only --ignore-scripts --no-audit --no-fund",
+  "dependencySubstitutions": false
+}

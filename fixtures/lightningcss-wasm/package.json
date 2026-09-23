@@ -1,0 +1,8 @@
+{
+  "name": "sandbox-lightningcss-wasm-fixture",
+  "private": true,
+  "version": "0.0.0",
+  "dependencies": {
+    "lightningcss-wasm": "1.33.0"
+  }
+}

@@ -1,0 +1,1040 @@
+diff --git a/vendor/quickjs/quickjs.c b/vendor/quickjs/quickjs.c
+index e32f0f3..d0c763e 100644
+--- a/vendor/quickjs/quickjs.c
++++ b/vendor/quickjs/quickjs.c
+@@ -34,7 +34,7 @@
+ #include <math.h>
+ #if defined(__APPLE__)
+ #include <malloc/malloc.h>
+-#elif defined(__linux__) || defined(__GLIBC__)
++#elif defined(__linux__) || defined(__GLIBC__) || defined(EMSCRIPTEN)
+ #include <malloc.h>
+ #elif defined(__FreeBSD__)
+ #include <malloc_np.h>
+@@ -279,6 +279,9 @@ struct JSRuntime {
+ 
+     JSInterruptHandler *interrupt_handler;
+     void *interrupt_opaque;
++    /* A script deadline covers all calls, including other realms. */
++    struct QJSScriptBudget *script_budget;
++    uint32_t sandbox_context_count;
+ 
+     JSHostPromiseRejectionTracker *host_promise_rejection_tracker;
+     void *host_promise_rejection_tracker_opaque;
+@@ -444,6 +447,12 @@ typedef enum {
+    enough to call the interrupt callback often. */
+ #define JS_INTERRUPT_COUNTER_INIT 10000
+ 
++typedef struct QJSScriptBudget {
++    struct QJSScriptBudget *previous;
++    double deadline;
++    BOOL expired;
++} QJSScriptBudget;
++
+ struct JSContext {
+     JSGCObjectHeader header; /* must come first */
+     JSRuntime *rt;
+@@ -464,6 +473,11 @@ struct JSContext {
+     JSValue array_ctor;
+     JSValue regexp_ctor;
+     JSValue promise_ctor;
++    /* Embedder async context, captured at reaction registration. */
++    JSValue async_context;
++    BOOL compiling_guest_script;
++    BOOL string_codegen_disabled;
++    int script_line_offset, script_column_offset;
+     JSValue native_error_proto[JS_NATIVE_ERROR_COUNT];
+     JSValue iterator_ctor;
+     JSValue async_iterator_proto;
+@@ -473,6 +487,7 @@ struct JSContext {
+ 
+     JSValue global_obj; /* global object */
+     JSValue global_var_obj; /* contains the global let/const definitions */
++    JSValue global_bridge_vars; /* unresolved refs for a contextified global */
+ 
+     uint64_t random_state;
+ 
+@@ -631,6 +646,7 @@ typedef struct JSFunctionBytecode {
+     uint8_t super_allowed : 1;
+     uint8_t arguments_allowed : 1;
+     uint8_t has_debug : 1;
++    uint8_t is_guest_script : 1;
+     uint8_t read_only_bytecode : 1;
+     uint8_t is_direct_or_indirect_eval : 1; /* used by JS_GetScriptOrModuleName() */
+     /* XXX: 10 bits available */
+@@ -651,6 +667,7 @@ typedef struct JSFunctionBytecode {
+     struct {
+         /* debug info, move to separate structure to save memory? */
+         JSAtom filename;
++        int script_line_offset, script_column_offset;
+         int source_len; 
+         int pc2line_len;
+         uint8_t *pc2line_buf;
+@@ -875,6 +892,7 @@ typedef struct JSJobEntry {
+     struct list_head link;
+     JSContext *realm;
+     JSJobFunc *job_func;
++    JSValue async_context;
+     int argc;
+     JSValue argv[0];
+ } JSJobEntry;
+@@ -1722,7 +1740,9 @@ static size_t js_def_malloc_usable_size(const void *ptr)
+ #elif defined(_WIN32)
+     return _msize((void *)ptr);
+ #elif defined(EMSCRIPTEN)
+-    return 0;
++    /* Pinned Emscripten provides malloc_usable_size for both dlmalloc and
++       emmalloc. Returning zero silently disables aggregate heap accounting. */
++    return malloc_usable_size((void *)ptr);
+ #elif defined(__linux__) || defined(__GLIBC__)
+     return malloc_usable_size((void *)ptr);
+ #else
+@@ -1854,6 +1874,7 @@ int JS_EnqueueJob(JSContext *ctx, JSJobFunc *job_func,
+         return -1;
+     e->realm = JS_DupContext(ctx);
+     e->job_func = job_func;
++    e->async_context = JS_DupValue(ctx, ctx->async_context);
+     e->argc = argc;
+     for(i = 0; i < argc; i++) {
+         e->argv[i] = JS_DupValue(ctx, argv[i]);
+@@ -1876,7 +1897,7 @@ int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx)
+ {
+     JSContext *ctx;
+     JSJobEntry *e;
+-    JSValue res;
++    JSValue res, previous_context;
+     int i, ret;
+ 
+     if (list_empty(&rt->job_list)) {
+@@ -1889,7 +1910,11 @@ int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx)
+     e = list_entry(rt->job_list.next, JSJobEntry, link);
+     list_del(&e->link);
+     ctx = e->realm;
++    previous_context = ctx->async_context;
++    ctx->async_context = e->async_context;
+     res = e->job_func(ctx, e->argc, (JSValueConst *)e->argv);
++    JS_FreeValue(ctx, ctx->async_context);
++    ctx->async_context = previous_context;
+     for(i = 0; i < e->argc; i++)
+         JS_FreeValue(ctx, e->argv[i]);
+     if (JS_IsException(res))
+@@ -1985,6 +2010,7 @@ void JS_FreeRuntime(JSRuntime *rt)
+         JSJobEntry *e = list_entry(el, JSJobEntry, link);
+         for(i = 0; i < e->argc; i++)
+             JS_FreeValueRT(rt, e->argv[i]);
++        JS_FreeValueRT(rt, e->async_context);
+         JS_FreeContext(e->realm);
+         js_free_rt(rt, e);
+     }
+@@ -2171,11 +2197,15 @@ JSContext *JS_NewContextRaw(JSRuntime *rt)
+     if (!ctx)
+         return NULL;
+     ctx->header.ref_count = 1;
++    ctx->async_context = JS_UNDEFINED;
++    ctx->global_bridge_vars = JS_UNDEFINED;
+     add_gc_object(rt, &ctx->header, JS_GC_OBJ_TYPE_JS_CONTEXT);
+ 
+     ctx->class_proto = js_malloc_rt(rt, sizeof(ctx->class_proto[0]) *
+                                     rt->class_count);
+     if (!ctx->class_proto) {
++        /* The context was already linked into the GC object list. */
++        remove_gc_object(&ctx->header);
+         js_free_rt(rt, ctx);
+         return NULL;
+     }
+@@ -2299,6 +2329,7 @@ static void JS_MarkContext(JSRuntime *rt, JSContext *ctx,
+ 
+     JS_MarkValue(rt, ctx->global_obj, mark_func);
+     JS_MarkValue(rt, ctx->global_var_obj, mark_func);
++    JS_MarkValue(rt, ctx->global_bridge_vars, mark_func);
+ 
+     JS_MarkValue(rt, ctx->throw_type_error, mark_func);
+     JS_MarkValue(rt, ctx->eval_obj, mark_func);
+@@ -2313,6 +2344,7 @@ static void JS_MarkContext(JSRuntime *rt, JSContext *ctx,
+     JS_MarkValue(rt, ctx->iterator_ctor, mark_func);
+     JS_MarkValue(rt, ctx->async_iterator_proto, mark_func);
+     JS_MarkValue(rt, ctx->promise_ctor, mark_func);
++    JS_MarkValue(rt, ctx->async_context, mark_func);
+     JS_MarkValue(rt, ctx->array_ctor, mark_func);
+     JS_MarkValue(rt, ctx->regexp_ctor, mark_func);
+     JS_MarkValue(rt, ctx->function_ctor, mark_func);
+@@ -2374,6 +2406,7 @@ void JS_FreeContext(JSContext *ctx)
+ 
+     JS_FreeValue(ctx, ctx->global_obj);
+     JS_FreeValue(ctx, ctx->global_var_obj);
++    JS_FreeValue(ctx, ctx->global_bridge_vars);
+ 
+     JS_FreeValue(ctx, ctx->throw_type_error);
+     JS_FreeValue(ctx, ctx->eval_obj);
+@@ -2389,6 +2422,7 @@ void JS_FreeContext(JSContext *ctx)
+     JS_FreeValue(ctx, ctx->iterator_ctor);
+     JS_FreeValue(ctx, ctx->async_iterator_proto);
+     JS_FreeValue(ctx, ctx->promise_ctor);
++    JS_FreeValue(ctx, ctx->async_context);
+     JS_FreeValue(ctx, ctx->array_ctor);
+     JS_FreeValue(ctx, ctx->regexp_ctor);
+     JS_FreeValue(ctx, ctx->function_ctor);
+@@ -7178,6 +7212,9 @@ static void build_backtrace(JSContext *ctx, JSValueConst error_obj,
+                 line_num1 = find_line_num(ctx, b,
+                                           sf->cur_pc - b->byte_code_buf - 1, &col_num1);
+                 atom_str = JS_AtomToCString(ctx, b->debug.filename);
++                if (line_num1 == 1)
++                    col_num1 += b->debug.script_column_offset;
++                line_num1 += b->debug.script_line_offset;
+                 dbuf_printf(&dbuf, " (%s",
+                             atom_str ? atom_str : "<null>");
+                 JS_FreeCString(ctx, atom_str);
+@@ -7257,6 +7294,16 @@ static JSValue JS_ThrowError(JSContext *ctx, JSErrorEnum error_num,
+     return JS_ThrowError2(ctx, error_num, fmt, ap, add_backtrace);
+ }
+ 
++static JSValue __attribute__((format(printf, 2, 3))) qjs_throw_eval_error(JSContext *ctx, const char *fmt, ...)
++{
++    JSValue val;
++    va_list ap;
++    va_start(ap, fmt);
++    val = JS_ThrowError(ctx, JS_EVAL_ERROR, fmt, ap);
++    va_end(ap);
++    return val;
++}
++
+ JSValue __attribute__((format(printf, 2, 3))) JS_ThrowSyntaxError(JSContext *ctx, const char *fmt, ...)
+ {
+     JSValue val;
+@@ -7445,9 +7492,17 @@ static void JS_ThrowInterrupted(JSContext *ctx)
+     JS_SetUncatchableException(ctx, TRUE);
+ }
+ 
++static double qjs_script_now(void)
++{
++    struct timespec ts;
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1000000.0;
++}
++
+ static no_inline __exception int __js_poll_interrupts(JSContext *ctx)
+ {
+     JSRuntime *rt = ctx->rt;
++    QJSScriptBudget *expired = NULL;
+     ctx->interrupt_counter = JS_INTERRUPT_COUNTER_INIT;
+     if (rt->interrupt_handler) {
+         if (rt->interrupt_handler(rt, rt->interrupt_opaque)) {
+@@ -7455,6 +7510,20 @@ static no_inline __exception int __js_poll_interrupts(JSContext *ctx)
+             return -1;
+         }
+     }
++    if (rt->script_budget) {
++        double now = qjs_script_now();
++        /* If several budgets expired between polls, unwind to the outermost
++           expired owner. An inner catch must not swallow an outer deadline. */
++        for (QJSScriptBudget *budget = rt->script_budget; budget; budget = budget->previous) {
++            if (budget->deadline > 0 && now >= budget->deadline)
++                expired = budget;
++        }
++    }
++    if (expired) {
++        expired->expired = TRUE;
++        JS_ThrowInterrupted(ctx);
++        return -1;
++    }
+     return 0;
+ }
+ 
+@@ -10388,18 +10457,323 @@ static int JS_DefineObjectNameComputed(JSContext *ctx, JSValueConst obj,
+ #define DEFINE_GLOBAL_LEX_VAR (1 << 7)
+ #define DEFINE_GLOBAL_FUNC_VAR (1 << 6)
+ 
++/* A contextified global is not a Proxy: Node's sandbox descriptors and the
++   realm's hidden declaration descriptors may legitimately differ. All values
++   here belong to the same QuickJS runtime; no host objects cross this bridge. */
++typedef struct QJSGlobalBridge {
++    JSValue sandbox;
++    JSValue backing;
++} QJSGlobalBridge;
++
++static JSClassID qjs_global_bridge_class;
++
++static void qjs_bridge_finalizer(JSRuntime *rt, JSValue obj)
++{
++    QJSGlobalBridge *s = JS_GetOpaque(obj, qjs_global_bridge_class);
++    if (s) {
++        JS_FreeValueRT(rt, s->sandbox);
++        JS_FreeValueRT(rt, s->backing);
++        js_free_rt(rt, s);
++    }
++}
++
++static void qjs_bridge_mark(JSRuntime *rt, JSValueConst obj, JS_MarkFunc *mark)
++{
++    QJSGlobalBridge *s = JS_GetOpaque(obj, qjs_global_bridge_class);
++    if (s) {
++        JS_MarkValue(rt, s->sandbox, mark);
++        JS_MarkValue(rt, s->backing, mark);
++    }
++}
++
++static int qjs_bridge_own(JSContext *ctx, JSPropertyDescriptor *desc,
++                          JSValueConst obj, JSAtom prop)
++{
++    QJSGlobalBridge *s = JS_GetOpaque(obj, qjs_global_bridge_class);
++    int ret = JS_GetOwnProperty(ctx, desc, s->sandbox, prop);
++    if (ret) return ret;
++    return JS_GetOwnProperty(ctx, desc, s->backing, prop);
++}
++
++static int qjs_bridge_has(JSContext *ctx, JSValueConst obj, JSAtom prop)
++{
++    QJSGlobalBridge *s = JS_GetOpaque(obj, qjs_global_bridge_class);
++    int ret = JS_HasProperty(ctx, s->sandbox, prop);
++    if (ret) return ret;
++    return JS_HasProperty(ctx, s->backing, prop);
++}
++
++static JSValue qjs_bridge_get(JSContext *ctx, JSValueConst obj, JSAtom prop,
++                              JSValueConst receiver)
++{
++    QJSGlobalBridge *s = JS_GetOpaque(obj, qjs_global_bridge_class);
++    JSValue result;
++    int ret = JS_HasProperty(ctx, s->sandbox, prop);
++    if (ret < 0) return JS_EXCEPTION;
++    result = ret ? JS_GetProperty(ctx, s->sandbox, prop) :
++        JS_GetPropertyInternal(ctx, s->backing, prop, obj, FALSE);
++    if (JS_IsObject(result) && JS_VALUE_GET_PTR(result) == JS_VALUE_GET_PTR(s->sandbox)) {
++        JS_FreeValue(ctx, result);
++        return JS_DupValue(ctx, obj);
++    }
++    return result;
++}
++
++static int qjs_bridge_set(JSContext *ctx, JSValueConst obj, JSAtom prop,
++                           JSValueConst value, JSValueConst receiver, int flags)
++{
++    QJSGlobalBridge *s = JS_GetOpaque(obj, qjs_global_bridge_class);
++    JSPropertyDescriptor desc;
++    int own = JS_GetOwnProperty(ctx, &desc, s->sandbox, prop), ret;
++    if (own < 0) return -1;
++    if (!JS_IsObject(receiver) || JS_VALUE_GET_PTR(receiver) != JS_VALUE_GET_PTR(obj)) {
++        if (own) js_free_desc(ctx, &desc);
++        ret = qjs_bridge_own(ctx, &desc, obj, prop);
++        if (ret < 0) return -1;
++        if (ret) {
++            BOOL read_only = (desc.flags & JS_PROP_TMASK) != JS_PROP_GETSET && !(desc.flags & JS_PROP_WRITABLE);
++            js_free_desc(ctx, &desc);
++            if (read_only) return JS_ThrowTypeErrorReadOnly(ctx, flags, prop);
++        }
++        if (!JS_IsObject(receiver)) return JS_ThrowTypeErrorOrFalse(ctx, flags, "receiver is not an object");
++        ret = JS_GetOwnProperty(ctx, &desc, receiver, prop);
++        if (ret < 0) return -1;
++        if (ret) {
++            BOOL read_only = (desc.flags & JS_PROP_TMASK) == JS_PROP_GETSET || !(desc.flags & JS_PROP_WRITABLE);
++            js_free_desc(ctx, &desc);
++            if (read_only) return JS_ThrowTypeErrorReadOnly(ctx, flags, prop);
++        }
++        return JS_DefineProperty(ctx, receiver, prop, value, JS_UNDEFINED, JS_UNDEFINED,
++            JS_PROP_HAS_VALUE | (ret ? 0 : JS_PROP_C_W_E | JS_PROP_HAS_CONFIGURABLE | JS_PROP_HAS_WRITABLE | JS_PROP_HAS_ENUMERABLE) | flags);
++    }
++    if (own) {
++        BOOL accessor = (desc.flags & JS_PROP_TMASK) == JS_PROP_GETSET;
++        BOOL writable = desc.flags & JS_PROP_WRITABLE;
++        JS_FreeValue(ctx, desc.value);
++        JS_FreeValue(ctx, desc.getter);
++        JS_FreeValue(ctx, desc.setter);
++        ret = JS_SetPropertyInternal(ctx, s->sandbox, prop, JS_DupValue(ctx, value), s->sandbox, flags);
++        if (ret <= 0 || accessor || !writable) return ret;
++    } else {
++        int backing = JS_GetOwnProperty(ctx, &desc, s->backing, prop);
++        if (backing < 0) return -1;
++        if (backing) {
++            BOOL read_only = (desc.flags & JS_PROP_TMASK) != JS_PROP_GETSET && !(desc.flags & JS_PROP_WRITABLE);
++            JS_FreeValue(ctx, desc.value);
++            JS_FreeValue(ctx, desc.getter);
++            JS_FreeValue(ctx, desc.setter);
++            if (read_only)
++                return JS_SetPropertyInternal(ctx, s->backing, prop, JS_DupValue(ctx, value), s->backing, flags);
++        }
++        ret = JS_IsExtensible(ctx, s->sandbox);
++        if (ret < 0) return -1;
++        if (ret) {
++            ret = JS_SetPropertyInternal(ctx, s->sandbox, prop, JS_DupValue(ctx, value), s->sandbox, flags);
++            if (ret <= 0) return ret;
++        }
++    }
++    /* Retain the last guest write behind declared bindings. For a frozen
++       sandbox, new assignments are still permitted on the realm's global. */
++    ret = JS_HasProperty(ctx, s->backing, prop);
++    if (ret < 0) return -1;
++    if (ret || !own) {
++        int extensible = JS_IsExtensible(ctx, s->sandbox);
++        if (extensible < 0) return -1;
++        if (ret || !extensible)
++            return JS_SetPropertyInternal(ctx, s->backing, prop, JS_DupValue(ctx, value), extensible ? obj : s->backing, flags);
++    }
++    return TRUE;
++}
++
++static int qjs_bridge_define(JSContext *ctx, JSValueConst obj, JSAtom prop,
++                              JSValueConst value, JSValueConst getter,
++                              JSValueConst setter, int flags)
++{
++    QJSGlobalBridge *s = JS_GetOpaque(obj, qjs_global_bridge_class);
++    int ret = JS_DefineProperty(ctx, s->sandbox, prop, value, getter, setter, flags);
++    if (ret <= 0) return ret;
++    return JS_DefineProperty(ctx, s->backing, prop, value, getter, setter, flags);
++}
++
++static int qjs_bridge_delete(JSContext *ctx, JSValueConst obj, JSAtom prop)
++{
++    QJSGlobalBridge *s = JS_GetOpaque(obj, qjs_global_bridge_class);
++    int ret = JS_DeleteProperty(ctx, s->sandbox, prop, 0);
++    if (ret <= 0) return ret;
++    return JS_DeleteProperty(ctx, s->backing, prop, 0);
++}
++
++static int qjs_bridge_names(JSContext *ctx, JSPropertyEnum **ptab, uint32_t *plen,
++                             JSValueConst obj)
++{
++    QJSGlobalBridge *s = JS_GetOpaque(obj, qjs_global_bridge_class);
++    JSPropertyEnum *a = NULL, *b = NULL, *out;
++    JSValue seen;
++    uint32_t na = 0, nb = 0, n = 0, i;
++    int flags = JS_GPN_STRING_MASK | JS_GPN_SYMBOL_MASK;
++    if (JS_GetOwnPropertyNames(ctx, &a, &na, s->backing, flags) < 0) return -1;
++    if (JS_GetOwnPropertyNames(ctx, &b, &nb, s->sandbox, flags) < 0) {
++        JS_FreePropertyEnum(ctx, a, na);
++        return -1;
++    }
++    out = js_malloc(ctx, ((size_t)na + nb + 1) * sizeof(*out));
++    if (!out) {
++        JS_FreePropertyEnum(ctx, a, na);
++        JS_FreePropertyEnum(ctx, b, nb);
++        return -1;
++    }
++    seen = JS_NewObjectProto(ctx, JS_NULL);
++    if (JS_IsException(seen)) goto fail;
++    for (i = 0; i < na; i++) {
++        if (js_poll_interrupts(ctx) || JS_DefinePropertyValue(ctx, seen, a[i].atom, JS_TRUE, 0) < 0) goto fail;
++        out[n].atom = JS_DupAtom(ctx, a[i].atom);
++        out[n++].is_enumerable = a[i].is_enumerable;
++    }
++    for (i = 0; i < nb; i++) {
++        if (js_poll_interrupts(ctx)) goto fail;
++        if (!JS_GetOwnProperty(ctx, NULL, seen, b[i].atom)) {
++            out[n].atom = JS_DupAtom(ctx, b[i].atom);
++            out[n++].is_enumerable = b[i].is_enumerable;
++        }
++    }
++    JS_FreeValue(ctx, seen);
++    JS_FreePropertyEnum(ctx, a, na);
++    JS_FreePropertyEnum(ctx, b, nb);
++    *ptab = out;
++    *plen = n;
++    return 0;
++ fail:
++    JS_FreeValue(ctx, seen);
++    JS_FreePropertyEnum(ctx, out, n);
++    JS_FreePropertyEnum(ctx, a, na);
++    JS_FreePropertyEnum(ctx, b, nb);
++    return -1;
++}
++
++static int qjs_bridge_prevent_extensions(JSContext *ctx, JSValueConst obj)
++{
++    return FALSE;
++}
++
++static JSValue qjs_bridge_prototype(JSContext *ctx, JSValueConst obj)
++{
++    QJSGlobalBridge *s = JS_GetOpaque(obj, qjs_global_bridge_class);
++    return JS_GetPrototype(ctx, s->backing);
++}
++
++static int qjs_bridge_set_prototype(JSContext *ctx, JSValueConst obj, JSValueConst proto)
++{
++    QJSGlobalBridge *s = JS_GetOpaque(obj, qjs_global_bridge_class);
++    JSObject *p = JS_IsObject(proto) ? JS_VALUE_GET_OBJ(proto) : NULL;
++    while (p) {
++        if (p == JS_VALUE_GET_OBJ(obj)) return FALSE;
++        p = p->shape->proto;
++    }
++    return JS_SetPrototypeInternal(ctx, s->backing, proto, FALSE);
++}
++
++static JSClassExoticMethods qjs_bridge_methods = {
++    .get_own_property = qjs_bridge_own,
++    .get_own_property_names = qjs_bridge_names,
++    .delete_property = qjs_bridge_delete,
++    .define_own_property = qjs_bridge_define,
++    .has_property = qjs_bridge_has,
++    .get_property = qjs_bridge_get,
++    .set_property = qjs_bridge_set,
++    .get_prototype = qjs_bridge_prototype,
++    .set_prototype = qjs_bridge_set_prototype,
++    .prevent_extensions = qjs_bridge_prevent_extensions,
++};
++
++static JSValue js_create_from_ctor(JSContext *ctx, JSValueConst ctor, int class_id);
++static JSValueConst JS_GetActiveFunction(JSContext *ctx);
++
++static JSValue qjs_global_constructor(JSContext *ctx, JSValueConst new_target,
++                                       int argc, JSValueConst *argv)
++{
++    return js_create_from_ctor(ctx, JS_IsUndefined(new_target) ? JS_GetActiveFunction(ctx) : new_target, JS_CLASS_OBJECT);
++}
++
++/* Trusted, one-time bootstrap hook. The embedder must capture and remove it
++   before running guest scripts, just like the string-generation policy hook. */
++static JSValue qjs_contextify_global(JSContext *ctx, JSValueConst this_val,
++                                      int argc, JSValueConst *argv)
++{
++    JSValue obj, vars, proto, ctor;
++    QJSGlobalBridge *s;
++    JSClassDef def = { "ContextGlobal", qjs_bridge_finalizer, qjs_bridge_mark, NULL, &qjs_bridge_methods };
++    if (argc < 1 || !JS_IsObject(argv[0])) return JS_ThrowTypeErrorNotAnObject(ctx);
++    if (!JS_IsUndefined(ctx->global_bridge_vars)) return JS_ThrowTypeError(ctx, "Global is already contextified");
++    JS_NewClassID(&qjs_global_bridge_class);
++    if (!JS_IsRegisteredClass(ctx->rt, qjs_global_bridge_class) &&
++        JS_NewClass(ctx->rt, qjs_global_bridge_class, &def) < 0) return JS_EXCEPTION;
++    obj = JS_NewObjectProtoClass(ctx, JS_NULL, qjs_global_bridge_class);
++    if (JS_IsException(obj)) return obj;
++    s = js_mallocz(ctx, sizeof(*s));
++    if (!s) { JS_FreeValue(ctx, obj); return JS_EXCEPTION; }
++    s->sandbox = JS_DupValue(ctx, argv[0]);
++    s->backing = JS_DupValue(ctx, ctx->global_obj);
++    JS_SetOpaque(obj, s);
++    vars = JS_NewObjectProtoClass(ctx, JS_NULL, JS_CLASS_GLOBAL_OBJECT);
++    if (JS_IsException(vars)) { JS_FreeValue(ctx, obj); return vars; }
++    JS_VALUE_GET_OBJ(vars)->u.global_object.uninitialized_vars = JS_NewObjectProto(ctx, JS_NULL);
++    if (JS_IsException(JS_VALUE_GET_OBJ(vars)->u.global_object.uninitialized_vars)) {
++        JS_FreeValue(ctx, vars); JS_FreeValue(ctx, obj); return JS_EXCEPTION;
++    }
++    if (JS_DeleteProperty(ctx, s->backing, JS_ATOM_Symbol_toStringTag, JS_PROP_THROW) < 0) {
++        JS_FreeValue(ctx, vars); JS_FreeValue(ctx, obj); return JS_EXCEPTION;
++    }
++    proto = JS_NewObject(ctx);
++    if (JS_IsException(proto)) {
++        JS_FreeValue(ctx, vars); JS_FreeValue(ctx, obj); return JS_EXCEPTION;
++    }
++    ctor = JS_NewCFunction2(ctx, qjs_global_constructor, "", 0, JS_CFUNC_constructor_or_func, 0);
++    if (JS_IsException(ctor) || JS_SetConstructor(ctx, ctor, proto) < 0 || JS_SetPrototype(ctx, s->backing, proto) < 0) {
++        JS_FreeValue(ctx, ctor);
++        JS_FreeValue(ctx, proto); JS_FreeValue(ctx, vars); JS_FreeValue(ctx, obj); return JS_EXCEPTION;
++    }
++    JS_FreeValue(ctx, ctor);
++    JS_FreeValue(ctx, proto);
++    if (JS_SetPropertyStr(ctx, s->backing, "globalThis", JS_DupValue(ctx, obj)) < 0) {
++        JS_FreeValue(ctx, vars); JS_FreeValue(ctx, obj); return JS_EXCEPTION;
++    }
++    ctx->global_bridge_vars = vars;
++    JS_FreeValue(ctx, ctx->global_obj);
++    ctx->global_obj = obj;
++    return JS_DupValue(ctx, obj);
++}
++
+ static JSValue JS_ThrowSyntaxErrorVarRedeclaration(JSContext *ctx, JSAtom prop)
+ {
+     return JS_ThrowSyntaxErrorAtom(ctx, "redeclaration of '%s'", prop);
+ }
+ 
+ /* flags is 0, DEFINE_GLOBAL_LEX_VAR or DEFINE_GLOBAL_FUNC_VAR */
+-/* XXX: could support exotic global object. */
+ static int JS_CheckDefineGlobalVar(JSContext *ctx, JSAtom prop, int flags)
+ {
+     JSObject *p;
+     JSShapeProperty *prs;
+ 
++    if (!JS_IsUndefined(ctx->global_bridge_vars)) {
++        JSPropertyDescriptor desc;
++        QJSGlobalBridge *bridge = JS_GetOpaque(ctx->global_obj, qjs_global_bridge_class);
++        int ret = JS_GetOwnProperty(ctx, &desc,
++            (flags & DEFINE_GLOBAL_LEX_VAR) ? bridge->backing : ctx->global_obj, prop);
++        int property_flags = ret > 0 ? desc.flags : 0;
++        if (ret < 0) return -1;
++        if (ret) {
++            JS_FreeValue(ctx, desc.value);
++            JS_FreeValue(ctx, desc.getter);
++            JS_FreeValue(ctx, desc.setter);
++        }
++        if ((flags & DEFINE_GLOBAL_LEX_VAR) && ret && !(property_flags & JS_PROP_CONFIGURABLE))
++            goto fail_redeclaration;
++        if ((flags & DEFINE_GLOBAL_FUNC_VAR) && ret && !(property_flags & JS_PROP_CONFIGURABLE) &&
++            ((property_flags & JS_PROP_TMASK) == JS_PROP_GETSET ||
++             (property_flags & (JS_PROP_WRITABLE | JS_PROP_ENUMERABLE)) != (JS_PROP_WRITABLE | JS_PROP_ENUMERABLE)))
++            goto fail_redeclaration;
++        goto check_lexical;
++    }
+     p = JS_VALUE_GET_OBJ(ctx->global_obj);
+     prs = find_own_property1(p, prop);
+     /* XXX: should handle JS_PROP_AUTOINIT */
+@@ -10424,6 +10798,7 @@ static int JS_CheckDefineGlobalVar(JSContext *ctx, JSAtom prop, int flags)
+         }
+     }
+     /* check if there already is a lexical declaration */
++ check_lexical:
+     p = JS_VALUE_GET_OBJ(ctx->global_var_obj);
+     prs = find_own_property1(p, prop);
+     if (prs) {
+@@ -16745,6 +17120,19 @@ static JSVarRef *js_closure_define_global_var(JSContext *ctx, JSClosureVar *cv,
+     int flags;
+     JSProperty *pr;
+     JSVarRef *var_ref;
++
++    if (!cv->is_lexical && !JS_IsUndefined(ctx->global_bridge_vars)) {
++        QJSGlobalBridge *bridge = JS_GetOpaque(ctx->global_obj, qjs_global_bridge_class);
++        int exists = JS_GetOwnProperty(ctx, NULL, bridge->backing, cv->var_name);
++        if (exists < 0) return NULL;
++        if (!exists) {
++            flags = JS_PROP_ENUMERABLE | JS_PROP_WRITABLE;
++            if (is_direct_or_indirect_eval) flags |= JS_PROP_CONFIGURABLE;
++            if (JS_DefinePropertyValue(ctx, bridge->backing, cv->var_name, JS_UNDEFINED, flags) < 0)
++                return NULL;
++        }
++        return js_global_object_get_uninitialized_var(ctx, JS_VALUE_GET_OBJ(ctx->global_bridge_vars), cv->var_name);
++    }
+     
+     if (cv->is_lexical) {
+         p = JS_VALUE_GET_OBJ(ctx->global_var_obj);
+@@ -16762,7 +17150,7 @@ static JSVarRef *js_closure_define_global_var(JSContext *ctx, JSClosureVar *cv,
+ 
+         /* if there is a corresponding global variable, reuse its
+            reference and create a new one for the global variable */
+-        p1 = JS_VALUE_GET_OBJ(ctx->global_obj);
++        p1 = JS_VALUE_GET_OBJ(JS_IsUndefined(ctx->global_bridge_vars) ? ctx->global_obj : ctx->global_bridge_vars);
+         prs = find_own_property(&pr, p1, cv->var_name);
+         if (prs && (prs->flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
+             JSVarRef *var_ref1;
+@@ -16820,7 +17208,7 @@ static JSVarRef *js_closure_define_global_var(JSContext *ctx, JSClosureVar *cv,
+     }
+     
+     /* if there is a corresponding uninitialized variable, use it */
+-    p1 = JS_VALUE_GET_OBJ(ctx->global_obj);
++    p1 = JS_VALUE_GET_OBJ(JS_IsUndefined(ctx->global_bridge_vars) ? ctx->global_obj : ctx->global_bridge_vars);
+     var_ref = js_global_object_find_uninitialized_var(ctx, p1, cv->var_name, cv->is_lexical);
+     if (!var_ref)
+         return NULL;
+@@ -16855,6 +17243,8 @@ static JSVarRef *js_closure_global_var(JSContext *ctx, JSClosureVar *cv)
+         var_ref->header.ref_count++;
+         return var_ref;
+     }
++    if (!JS_IsUndefined(ctx->global_bridge_vars))
++        return js_global_object_get_uninitialized_var(ctx, JS_VALUE_GET_OBJ(ctx->global_bridge_vars), cv->var_name);
+     p = JS_VALUE_GET_OBJ(ctx->global_obj);
+  redo:
+     prs = find_own_property(&pr, p, cv->var_name);
+@@ -18079,6 +18469,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
+                         goto exception;
+                     } else {
+                         sf->cur_pc = pc;
++                        if (opcode == OP_get_var && !JS_IsUndefined(ctx->global_bridge_vars)) {
++                            int exists = JS_HasProperty(ctx, ctx->global_obj, cv->var_name);
++                            if (exists < 0) goto exception;
++                            if (!exists) {
++                                JS_ThrowReferenceErrorNotDefined(ctx, cv->var_name);
++                                goto exception;
++                            }
++                        }
+                         sp[0] = JS_GetPropertyInternal(ctx, ctx->global_obj,
+                                                        cv->var_name,
+                                                        ctx->global_obj,
+@@ -18122,7 +18520,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
+                             goto exception;
+                         }
+                         ret = JS_SetPropertyInternal(ctx, ctx->global_obj, cv->var_name, sp[-1],
+-                                                     ctx->global_obj, JS_PROP_THROW_STRICT);
++                                                     ctx->global_obj,
++                                                     opcode == OP_put_var_init && !JS_IsUndefined(ctx->global_bridge_vars) ? 0 : JS_PROP_THROW_STRICT);
+                         sp--;
+                         if (ret < 0)
+                             goto exception;
+@@ -21751,6 +22150,9 @@ static int js_parse_error_v(JSParseState *s, const uint8_t *ptr, const char *fmt
+     JSContext *ctx = s->ctx;
+     int line_num, col_num;
+     line_num = get_line_col(&col_num, s->buf_start, ptr - s->buf_start);
++    if (line_num == 0)
++        col_num += ctx->script_column_offset;
++    line_num += ctx->script_line_offset;
+     JS_ThrowError2(ctx, JS_SYNTAX_ERROR, fmt, ap, FALSE);
+     build_backtrace(ctx, ctx->rt->current_exception, s->filename,
+                     line_num + 1, col_num + 1, 0);
+@@ -30548,6 +30950,20 @@ static JSValue js_dynamic_import(JSContext *ctx, JSValueConst specifier, JSValue
+         }
+     }
+ 
++    if (ctx->rt->current_stack_frame) {
++        JSValueConst current = ctx->rt->current_stack_frame->cur_func;
++        if (JS_IsObject(current)) {
++            JSObject *object = JS_VALUE_GET_OBJ(current);
++            if (js_class_has_bytecode(object->class_id) && object->u.func.function_bytecode->is_guest_script) {
++                JSValue error = JS_NewError(ctx);
++                JS_DefinePropertyValueStr(ctx, error, "name", JS_NewString(ctx, "TypeError"), JS_PROP_C_W_E);
++                JS_DefinePropertyValueStr(ctx, error, "message", JS_NewString(ctx, "A dynamic import callback was not specified"), JS_PROP_C_W_E);
++                JS_DefinePropertyValueStr(ctx, error, "code", JS_NewString(ctx, "ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING"), JS_PROP_C_W_E);
++                JS_Throw(ctx, error);
++                goto exception;
++            }
++        }
++    }
+     args[0] = resolving_funcs[0];
+     args[1] = resolving_funcs[1];
+     args[2] = basename_val;
+@@ -33483,7 +33899,10 @@ static void instantiate_hoisted_definitions(JSContext *ctx, JSFunctionDef *s, Dy
+                 dbuf_putc(bc, OP_undefined);
+             }
+             if (!has_var_obj) {
+-                dbuf_putc(bc, OP_put_var_ref);
++                /* Global hoisting must use the object environment too. A
++                   direct var-ref write bypasses contextified global setters. */
++                dbuf_putc(bc, s->closure_var[idx].closure_type == JS_CLOSURE_GLOBAL_DECL &&
++                              !s->closure_var[idx].is_lexical ? OP_put_var_init : OP_put_var_ref);
+                 dbuf_put_u16(bc, idx);
+             } else {
+                 dbuf_putc(bc, OP_define_field);
+@@ -35600,6 +36019,7 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
+     fd->cpool = NULL;
+ 
+     b->stack_size = stack_size;
++    b->is_guest_script = ctx->compiling_guest_script || !JS_IsUndefined(ctx->global_bridge_vars);
+ 
+     if (fd->strip_debug) {
+         JS_FreeAtom(ctx, fd->filename);
+@@ -35610,6 +36030,8 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
+          */
+         b->has_debug = 1;
+         b->debug.filename = fd->filename;
++        b->debug.script_line_offset = ctx->script_line_offset;
++        b->debug.script_column_offset = ctx->script_column_offset;
+ 
+         //DynBuf pc2line;
+         //compute_pc2line_info(fd, &pc2line);
+@@ -36731,6 +37153,11 @@ static JSValue JS_EvalObject(JSContext *ctx, JSValueConst this_obj,
+     const char *str;
+     size_t len;
+ 
++    /* Guest eval and every Function constructor come through here. Host
++       script/module compilation uses JS_EvalInternal directly. Node applies
++       the policy even to eval's non-string identity case. */
++    if (ctx->string_codegen_disabled)
++        return qjs_throw_eval_error(ctx, "Code generation from strings disallowed for this context");
+     if (!JS_IsString(val))
+         return JS_DupValue(ctx, val);
+     str = JS_ToCStringLen(ctx, &len, val);
+@@ -50525,7 +50952,7 @@ int JS_AddIntrinsicProxy(JSContext *ctx)
+         goto fail;
+     if (JS_DefinePropertyValueStr(ctx, ctx->global_obj, "Proxy",
+                                   obj1, JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE) < 0)
+-        goto fail;
++        return -1; /* obj1 was consumed, including on failure */
+     return 0;
+  fail:
+     JS_FreeValue(ctx, obj1);
+@@ -52322,6 +52749,7 @@ typedef struct JSPromiseReactionData {
+     struct list_head link; /* not used in promise_reaction_job */
+     JSValue resolving_funcs[2];
+     JSValue handler;
++    JSValue async_context;
+ } JSPromiseReactionData;
+ 
+ JSPromiseStateEnum JS_PromiseState(JSContext *ctx, JSValue promise)
+@@ -52349,6 +52777,7 @@ static void promise_reaction_data_free(JSRuntime *rt,
+     JS_FreeValueRT(rt, rd->resolving_funcs[0]);
+     JS_FreeValueRT(rt, rd->resolving_funcs[1]);
+     JS_FreeValueRT(rt, rd->handler);
++    JS_FreeValueRT(rt, rd->async_context);
+     js_free_rt(rt, rd);
+ }
+ 
+@@ -52356,10 +52785,12 @@ static JSValue promise_reaction_job(JSContext *ctx, int argc,
+                                     JSValueConst *argv)
+ {
+     JSValueConst handler, arg, func;
+-    JSValue res, res2;
++    JSValue res, res2, previous_context;
+     BOOL is_reject;
+ 
+-    assert(argc == 5);
++    assert(argc == 6);
++    previous_context = ctx->async_context;
++    ctx->async_context = JS_DupValue(ctx, argv[5]);
+     handler = argv[2];
+     is_reject = JS_ToBool(ctx, argv[3]);
+     arg = argv[4];
+@@ -52391,6 +52822,8 @@ static JSValue promise_reaction_job(JSContext *ctx, int argc,
+     }
+     JS_FreeValue(ctx, res);
+ 
++    JS_FreeValue(ctx, ctx->async_context);
++    ctx->async_context = previous_context;
+     return res2;
+ }
+ 
+@@ -52408,7 +52841,7 @@ static void fulfill_or_reject_promise(JSContext *ctx, JSValueConst promise,
+     JSPromiseData *s = JS_GetOpaque(promise, JS_CLASS_PROMISE);
+     struct list_head *el, *el1;
+     JSPromiseReactionData *rd;
+-    JSValueConst args[5];
++    JSValueConst args[6];
+ 
+     if (!s || s->promise_state != JS_PROMISE_PENDING)
+         return; /* should never happen */
+@@ -52432,7 +52865,8 @@ static void fulfill_or_reject_promise(JSContext *ctx, JSValueConst promise,
+         args[2] = rd->handler;
+         args[3] = JS_NewBool(ctx, is_reject);
+         args[4] = value;
+-        JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
++        args[5] = rd->async_context;
++        JS_EnqueueJob(ctx, promise_reaction_job, 6, args);
+         list_del(&rd->link);
+         promise_reaction_data_free(ctx->rt, rd);
+     }
+@@ -52633,6 +53067,7 @@ static void js_promise_mark(JSRuntime *rt, JSValueConst val,
+             JS_MarkValue(rt, rd->resolving_funcs[0], mark_func);
+             JS_MarkValue(rt, rd->resolving_funcs[1], mark_func);
+             JS_MarkValue(rt, rd->handler, mark_func);
++            JS_MarkValue(rt, rd->async_context, mark_func);
+         }
+     }
+     JS_MarkValue(rt, s->promise_result, mark_func);
+@@ -53182,6 +53617,7 @@ static __exception int perform_promise_then(JSContext *ctx,
+         if (!JS_IsFunction(ctx, handler))
+             handler = JS_UNDEFINED;
+         rd->handler = JS_DupValue(ctx, handler);
++        rd->async_context = JS_DupValue(ctx, ctx->async_context);
+         rd_array[i] = rd;
+     }
+ 
+@@ -53189,7 +53625,7 @@ static __exception int perform_promise_then(JSContext *ctx,
+         for(i = 0; i < 2; i++)
+             list_add_tail(&rd_array[i]->link, &s->promise_reactions[i]);
+     } else {
+-        JSValueConst args[5];
++        JSValueConst args[6];
+         if (s->promise_state == JS_PROMISE_REJECTED && !s->is_handled) {
+             JSRuntime *rt = ctx->rt;
+             if (rt->host_promise_rejection_tracker) {
+@@ -53204,7 +53640,8 @@ static __exception int perform_promise_then(JSContext *ctx,
+         args[2] = rd->handler;
+         args[3] = JS_NewBool(ctx, i);
+         args[4] = s->promise_result;
+-        JS_EnqueueJob(ctx, promise_reaction_job, 5, args);
++        args[5] = rd->async_context;
++        JS_EnqueueJob(ctx, promise_reaction_job, 6, args);
+         for(i = 0; i < 2; i++)
+             promise_reaction_data_free(ctx->rt, rd_array[i]);
+     }
+@@ -53602,12 +54039,34 @@ static JSClassShortDef const js_async_class_def[] = {
+     { JS_ATOM_AsyncGenerator, js_async_generator_finalizer, js_async_generator_mark },  /* JS_CLASS_ASYNC_GENERATOR */
+ };
+ 
++/* Bootstrap consumes and removes these globals before guest evaluation. */
++static JSValue js_get_async_context(JSContext *ctx, JSValueConst this_val,
++                                    int argc, JSValueConst *argv)
++{
++    return JS_DupValue(ctx, ctx->async_context);
++}
++
++static JSValue js_set_async_context(JSContext *ctx, JSValueConst this_val,
++                                    int argc, JSValueConst *argv)
++{
++    JSValue next = JS_DupValue(ctx, argv[0]);
++    JS_FreeValue(ctx, ctx->async_context);
++    ctx->async_context = next;
++    return JS_UNDEFINED;
++}
++
+ int JS_AddIntrinsicPromise(JSContext *ctx)
+ {
+     JSRuntime *rt = ctx->rt;
+     JSValue obj1;
+     JSCFunctionType ft;
+ 
++    if (JS_SetPropertyStr(ctx, ctx->global_obj, "__qjsGetAsyncContext",
++          JS_NewCFunction(ctx, js_get_async_context, "getAsyncContext", 0)) < 0 ||
++        JS_SetPropertyStr(ctx, ctx->global_obj, "__qjsSetAsyncContext",
++          JS_NewCFunction(ctx, js_set_async_context, "setAsyncContext", 1)) < 0)
++        return -1;
++
+     if (!JS_IsRegisteredClass(rt, JS_CLASS_PROMISE)) {
+         if (init_class_range(rt, js_async_class_def, JS_CLASS_PROMISE,
+                              countof(js_async_class_def)))
+@@ -55140,10 +55599,181 @@ int JS_AddIntrinsicDate(JSContext *ctx)
+ 
+ /* eval */
+ 
++/* QuickJS owns this closure and its bytecode, including GC and allocation
++   limits. Return raw guest values without unwrapping guest promises. */
++static JSValue qjs_run_script(JSContext *ctx, JSValueConst this_val,
++                             int argc, JSValueConst *argv, int magic,
++                             JSValue *data)
++{
++    int64_t timeout = 0;
++    JSValue result;
++    /* CFunctionData callbacks receive their caller's context. The retained
++       bytecode owns the script realm, including globals, lexical scope and
++       policy. Never instantiate it against the callback caller's globals. */
++    ctx = ((JSFunctionBytecode *)JS_VALUE_GET_PTR(data[0]))->realm;
++    QJSScriptBudget budget = {ctx->rt->script_budget, 0, FALSE};
++    if (argc && !JS_IsUndefined(argv[0])) {
++        double number;
++        if (!JS_IsNumber(argv[0]) || JS_ToFloat64(ctx, &number, argv[0]) < 0)
++            return JS_ThrowTypeError(ctx, "Expected a numeric script timeout");
++        if (!isfinite(number) || number < 0 || number > 2147483647 || floor(number) != number)
++            return JS_ThrowRangeError(ctx, "Script timeout is out of range");
++        timeout = number;
++    }
++    if (timeout)
++        budget.deadline = qjs_script_now() + timeout;
++    ctx->rt->script_budget = &budget;
++    result = JS_EvalFunction(ctx, JS_DupValue(ctx, data[0]));
++    ctx->rt->script_budget = budget.previous;
++    if (budget.expired) {
++        JSValue error;
++        JS_FreeValue(ctx, result);
++        JS_FreeValue(ctx, JS_GetException(ctx));
++        JS_SetUncatchableException(ctx, FALSE);
++        JS_ThrowInternalError(ctx, "Script execution timed out after %lldms", (long long)timeout);
++        error = JS_GetException(ctx);
++        JS_DefinePropertyValueStr(ctx, error, "name", JS_NewString(ctx, "Error"), JS_PROP_C_W_E);
++        JS_DefinePropertyValueStr(ctx, error, "code", JS_NewString(ctx, "ERR_SCRIPT_EXECUTION_TIMEOUT"), JS_PROP_C_W_E);
++        return JS_Throw(ctx, error);
++    }
++    return result;
++}
++
++static JSValue qjs_compile_script(JSContext *ctx, JSValueConst this_val,
++                                 int argc, JSValueConst *argv)
++{
++    const char *source, *filename;
++    size_t length, filename_length;
++    double line = 0, column = 0;
++    int previous_line = ctx->script_line_offset, previous_column = ctx->script_column_offset;
++    BOOL previous_script = ctx->compiling_guest_script;
++    JSValue compiled, result;
++    if (argc < 4 || !JS_IsString(argv[0]) || !JS_IsString(argv[1]) ||
++        !JS_IsNumber(argv[2]) || !JS_IsNumber(argv[3]))
++        return JS_ThrowTypeError(ctx, "Invalid script compilation arguments");
++    if (JS_ToFloat64(ctx, &line, argv[2]) < 0 || JS_ToFloat64(ctx, &column, argv[3]) < 0)
++        return JS_EXCEPTION;
++    if (!isfinite(line) || !isfinite(column) || floor(line) != line || floor(column) != column ||
++        line < -1000000 || line > 1000000 || column < -1000000 || column > 1000000)
++        return JS_ThrowRangeError(ctx, "Script source offset exceeds the sandbox limit");
++    source = JS_ToCStringLen(ctx, &length, argv[0]);
++    if (!source)
++        return JS_EXCEPTION;
++    filename = JS_ToCStringLen(ctx, &filename_length, argv[1]);
++    if (!filename) {
++        JS_FreeCString(ctx, source);
++        return JS_EXCEPTION;
++    }
++    if (length > 8 * 1024 * 1024 || filename_length > 4096 || strlen(filename) != filename_length) {
++        JS_FreeCString(ctx, source);
++        JS_FreeCString(ctx, filename);
++        return JS_ThrowRangeError(ctx, "Script source or filename exceeds the sandbox limit");
++    }
++    ctx->script_line_offset = line;
++    ctx->script_column_offset = column;
++    ctx->compiling_guest_script = TRUE;
++    compiled = JS_Eval(ctx, source, length, filename, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
++    ctx->script_line_offset = previous_line;
++    ctx->script_column_offset = previous_column;
++    ctx->compiling_guest_script = previous_script;
++    JS_FreeCString(ctx, source);
++    JS_FreeCString(ctx, filename);
++    if (JS_IsException(compiled))
++        return compiled;
++    result = JS_NewCFunctionData(ctx, qjs_run_script, 1, 0, 1, &compiled);
++    JS_FreeValue(ctx, compiled);
++    return result;
++}
++
++/* One-way initialization capability. The embedder removes it before running
++   guest code. No guest-visible property can turn code generation back on. */
++static JSValue qjs_disable_string_codegen(JSContext *ctx, JSValueConst this_val,
++                                         int argc, JSValueConst *argv)
++{
++    ctx->string_codegen_disabled = TRUE;
++    return JS_UNDEFINED;
++}
++
++/* Return only the child's trusted compiler capability. The compiler retains
++   its realm; ordinary QuickJS GC owns the realm/sandbox cycle after the
++   embedder reference is released. No host-side child context handle is needed. */
++static JSValue qjs_create_sandbox_context(JSContext *ctx, JSValueConst this_val,
++                                           int argc, JSValueConst *argv)
++{
++    JSContext *child;
++    JSValue compiler, global;
++    const char *hidden[] = { "__qjsCreateContext", "__qjsCompileScript",
++        "__qjsContextifyGlobal", "__qjsDisableStringCodeGeneration",
++        "__qjsGetAsyncContext", "__qjsSetAsyncContext", "__qjsExecutePendingJobs" };
++    int i;
++    if (argc < 2 || !JS_IsObject(argv[0]) || !JS_IsBool(argv[1]))
++        return JS_ThrowTypeError(ctx, "Invalid sandbox context arguments");
++    if (ctx->rt->sandbox_context_count >= 64) {
++        JSValue error;
++        JS_ThrowInternalError(ctx, "Sandbox context creation limit exceeded (64 per execution)");
++        error = JS_GetException(ctx);
++        JS_DefinePropertyValueStr(ctx, error, "code", JS_NewString(ctx, "ERR_RESOURCE_LIMIT"), JS_PROP_C_W_E);
++        return JS_Throw(ctx, error);
++    }
++    ctx->rt->sandbox_context_count++;
++    child = JS_NewContext(ctx->rt);
++    if (!child) return JS_ThrowInternalError(ctx, "Unable to allocate sandbox context");
++    compiler = JS_GetPropertyStr(child, child->global_obj, "__qjsCompileScript");
++    if (JS_IsException(compiler)) goto fail;
++    for (i = 0; i < countof(hidden); i++) {
++        JSAtom atom = JS_NewAtom(child, hidden[i]);
++        int ret;
++        if (atom == JS_ATOM_NULL) goto fail;
++        ret = JS_DeleteProperty(child, child->global_obj, atom, JS_PROP_THROW);
++        JS_FreeAtom(child, atom);
++        if (ret < 0) goto fail;
++    }
++    child->string_codegen_disabled = !JS_ToBool(child, argv[1]);
++    global = qjs_contextify_global(child, JS_UNDEFINED, 1, argv);
++    if (JS_IsException(global)) goto fail;
++    JS_FreeValue(child, global);
++    JS_FreeContext(child);
++    return compiler;
++ fail:
++    JS_FreeValue(child, compiler);
++    JS_FreeContext(child);
++    return JS_EXCEPTION;
++}
++
++/* The worker owns this pump. Results and exceptions are returned through its
++   root context, without adopting borrowed, GC-owned child context pointers in
++   the host wrapper. The original error object and its realm are preserved. */
++static JSValue qjs_execute_pending_jobs(JSContext *ctx, JSValueConst this_val,
++                                         int argc, JSValueConst *argv)
++{
++    int count = 0, status;
++    JSContext *job_ctx;
++    while (count < 100) {
++        status = JS_ExecutePendingJob(ctx->rt, &job_ctx);
++        if (status < 0) return JS_EXCEPTION;
++        if (!status) break;
++        count++;
++    }
++    return JS_NewInt32(ctx, count);
++}
++
+ int JS_AddIntrinsicEval(JSContext *ctx)
+ {
+     ctx->eval_internal = __JS_EvalInternal;
+-    return 0;
++    if (JS_SetPropertyStr(ctx, ctx->global_obj, "__qjsExecutePendingJobs",
++        JS_NewCFunction(ctx, qjs_execute_pending_jobs, "executePendingJobs", 0)) < 0)
++        return -1;
++    if (JS_SetPropertyStr(ctx, ctx->global_obj, "__qjsCreateContext",
++        JS_NewCFunction(ctx, qjs_create_sandbox_context, "createContext", 2)) < 0)
++        return -1;
++    if (JS_SetPropertyStr(ctx, ctx->global_obj, "__qjsContextifyGlobal",
++        JS_NewCFunction(ctx, qjs_contextify_global, "contextifyGlobal", 1)) < 0)
++        return -1;
++    if (JS_SetPropertyStr(ctx, ctx->global_obj, "__qjsDisableStringCodeGeneration",
++        JS_NewCFunction(ctx, qjs_disable_string_codegen, "disableStringCodeGeneration", 0)) < 0)
++        return -1;
++    return JS_SetPropertyStr(ctx, ctx->global_obj, "__qjsCompileScript",
++        JS_NewCFunction(ctx, qjs_compile_script, "compileScript", 4)) < 0 ? -1 : 0;
+ }
+ 
+ /* BigInt */

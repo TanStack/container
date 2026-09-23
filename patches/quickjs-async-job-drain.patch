@@ -1,0 +1,63 @@
+diff --git a/packages/quickjs-emscripten-core/src/runtime-asyncify.ts b/packages/quickjs-emscripten-core/src/runtime-asyncify.ts
+index 17026c3..8a47da9 100644
+--- a/packages/quickjs-emscripten-core/src/runtime-asyncify.ts
++++ b/packages/quickjs-emscripten-core/src/runtime-asyncify.ts
+@@ -3,6 +3,7 @@ import type {
+   QuickJSAsyncFFI,
+   JSContextPointer,
+   JSRuntimePointer,
++  JSContextPointerPointer,
+ } from "@jitl/quickjs-ffi-types"
+ import { QuickJSAsyncContext } from "./context-asyncify"
+ import type {
+@@ -11,7 +12,7 @@ import type {
+   QuickJSAsyncWASMModule,
+ } from "./module-asyncify"
+ import type { QuickJSModuleCallbacks } from "./module"
+-import { QuickJSRuntime } from "./runtime"
++import { QuickJSRuntime, type ExecutePendingJobsResult } from "./runtime"
+ import type {
+   ContextOptions,
+   JSModuleLoader,
+@@ -20,9 +21,40 @@ import type {
+   JSModuleNormalizerAsync,
+ } from "./types"
+ import { intrinsicsToFlags } from "./types"
+-import { Lifetime } from "./lifetime"
++import { Lifetime, DisposableResult } from "./lifetime"
+ 
+ export class QuickJSAsyncRuntime extends QuickJSRuntime {
++  /** Drain jobs that may suspend in an asyncified host function.
++   * The caller must serialize all entry into this WASM instance.
++   */
++  async executePendingJobsAsync(maxJobsToExecute = -1): Promise<ExecutePendingJobsResult> {
++    const out = this.memory.newMutablePointerArray<JSContextPointerPointer>(1)
++    let pointer
++    let ctxPtr: JSContextPointer
++    try {
++      pointer = await this.ffi.QTS_ExecutePendingJob_MaybeAsync(this.rt.value, maxJobsToExecute, out.value.ptr)
++      // Re-read the memory view after suspension, WASM memory may have grown.
++      ctxPtr = new Int32Array(this.module.HEAPU8.buffer, out.value.ptr, 1)[0] as JSContextPointer
++    } finally { out.dispose() }
++    if (!ctxPtr) {
++      this.ffi.QTS_FreeValuePointerRuntime(this.rt.value, pointer)
++      return DisposableResult.success(0)
++    }
++    const context = this.contextMap.get(ctxPtr)
++    if (!context) {
++      this.ffi.QTS_FreeValuePointerRuntime(this.rt.value, pointer)
++      throw new Error("Job belongs to an unknown context")
++    }
++    const value = context.getMemory(this.rt.value).heapValueHandle(pointer)
++    if (context.typeof(value) === "number") {
++      const count = context.getNumber(value)
++      value.dispose()
++      return DisposableResult.success(count)
++    }
++    const error = Object.assign(value, { context })
++    return DisposableResult.fail(error, error => context.unwrapResult(error))
++  }
++
+   public declare context: QuickJSAsyncContext | undefined
+ 
+   /** @private */

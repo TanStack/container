@@ -1,0 +1,18 @@
+diff --git a/source/m3_env.c b/source/m3_env.c
+--- a/source/m3_env.c
++++ b/source/m3_env.c
+@@ -863,1 +863,1 @@
+-        memory->mallocated->maxStack = (m3slot_t*)io_runtime->stack + io_runtime->numStackSlots;
++        memory->mallocated->maxStack = (m3slot_t*)io_runtime->originStack + io_runtime->numStackSlots;
+@@ -1680,5 +1680,11 @@
+     size_t needed    = ((size_t)ftype->numRets + ftype->numArgs) * sizeof(u64);
+     size_t available = (size_t)runtime->numStackSlots * sizeof(m3slot_t);
++    uintptr_t base = (uintptr_t)runtime->originStack;
++    uintptr_t current = (uintptr_t)runtime->stack;
++    if (current < base || current - base > available) {
++        return m3Err_trapStackOverflow;
++    }
++    available -= current - base;
+ 
+     if (needed > available) {
+         return m3Err_trapStackOverflow;

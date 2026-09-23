@@ -1,0 +1,321 @@
+--- a/source/m3_env.h
++++ b/source/m3_env.h
+@@ -101,6 +101,9 @@
+ // A table's elements are opaque pointer-sized references: IM3Function for a
+ // funcref table, a host handle for an externref one. NULL is the null reference.
+ typedef struct M3Table {
++#ifdef QJS_GUEST_WASM
++    void*            guestData;
++#endif
+     void**           elements;
+     u32              size;
+     u32              maxSize;            // 0 when the module declared no maximum
+@@ -123,6 +126,25 @@
+ 
+ typedef M3Table* IM3Table;
+ 
++#ifdef QJS_GUEST_WASM
++M3Result qwasm_prepare_instance(IM3Module module);
++M3Result qwasm_table_prepare(IM3Table table, u32 size);
++M3Result qwasm_table_update(IM3Table table, u32 index, void* value);
++int qwasm_function_types_equal(IM3FuncType a, IM3FuncType b);
++M3Result qwasm_call_indirect(IM3Function function, void* stack, IM3Runtime caller);
++#endif
++
++static inline
++M3Result Table_Set(IM3Table table, u32 index, void* value)
++{
++#ifdef QJS_GUEST_WASM
++    M3Result result = qwasm_table_update(table, index, value);
++    if (result) return result;
++#endif
++    table->elements[index] = value;
++    return m3Err_none;
++}
++
+ // The value type a table's indexes and sizes are expressed in - table64 is the
+ // same choice as memory64, made per table.
+ static inline
+@@ -169,6 +191,9 @@
+ //---------------------------------------------------------------------------------------------------------------------------------
+ 
+ typedef struct M3Global {
++#ifdef QJS_GUEST_WASM
++    void* guestData;
++#endif
+     M3ImportInfo     import;
+ 
+     // An import linked to another module's export: the global that actually
+@@ -195,7 +220,11 @@
+     bool     isMutable;
+ } M3Global;
+ 
++#ifdef QJS_GUEST_WASM
++M3Result qwasm_global_update(M3Global* global, void* value);
++#endif
+ 
++
+ //---------------------------------------------------------------------------------------------------------------------------------
+ 
+ #if d_m3HasExceptionHandling
+--- a/source/m3_env.c
++++ b/source/m3_env.c
+@@ -978,7 +978,7 @@
+ // expressions restricted to ref.null/ref.func, so they're read directly rather
+ // than run through the compiler.
+ static
+-M3Result ResolveElements (IM3Module io_module, M3ElementSegment* i_segment, void** o_elements)
++M3Result ResolveElements (IM3Module io_module, M3ElementSegment* i_segment, void** o_elements, IM3Table table, u32 offset)
+ {
+     M3Result result = m3Err_none;
+ 
+@@ -1035,7 +1035,11 @@
+             ref = Function_Implementation(&io_module->functions[funcIndex]);
+         }
+ 
+-        o_elements[e] = ref;
++        if (table) {
++_           (Table_Set(table, offset + e, ref));
++        } else {
++            o_elements[e] = ref;
++        }
+     }
+ 
+     _catch: return result;
+@@ -1068,7 +1072,7 @@
+                                      &start, table->initExpr + table->initExprSize));
+ 
+                 for (u32 e = 0; e < table->size; ++e) {
+-                    table->elements[e] = value;
++_                   (Table_Set(table, e, value));
+                 }
+             }
+         }
+@@ -1088,7 +1092,7 @@
+             if (segment->numElements) {
+                 segment->resolved = m3_AllocArray(void*, segment->numElements);
+                 _throwifnull(segment->resolved);
+-_               (ResolveElements(io_module, segment, segment->resolved));
++_               (ResolveElements(io_module, segment, segment->resolved, NULL, 0));
+             }
+             continue;
+         }
+@@ -1111,7 +1115,7 @@
+         _throwif("out of bounds table access",
+                  offset > table->size or segment->numElements > table->size - offset);
+ 
+-_       (ResolveElements(io_module, segment, table->elements + offset));
++_       (ResolveElements(io_module, segment, table->elements + offset, table, (u32)offset));
+ 
+         segment->dropped = true;
+     }
+@@ -1354,6 +1358,9 @@
+ 
+ _   (InitMemory(io_runtime, io_module));
+ _   (InitGlobals(io_module));
++#ifdef QJS_GUEST_WASM
++_   (qwasm_prepare_instance(io_module));
++#endif
+     // Spec order: element segments are applied before data segments. It matters
+     // when one of them traps - whatever ran before the trap stays done.
+ _   (InitTableAndElements(io_module));
+--- a/source/m3_exec.h
++++ b/source/m3_exec.h
+@@ -35,6 +35,12 @@
+ #include <limits.h>
+ 
+ d_m3BeginExternC
++
++#ifdef QJS_GUEST_WASM
++#define d_m3FunctionTypesEqual(A, B) qwasm_function_types_equal(A, B)
++#else
++#define d_m3FunctionTypesEqual(A, B) ((A) == (B))
++#endif
+ 
+ #define rewrite_op(OP)             * ((void **) (_pc-1)) = (void*)(OP)
+ 
+@@ -44,6 +50,7 @@
+ #define slot(TYPE)                 * (TYPE *) (_sp + immediate (i32))
+ #define slot_ptr(TYPE)             (TYPE *) (_sp + immediate (i32))
+ 
++
+ // Reads one address, index or length operand from a slot, at the width the
+ // memory or table it belongs to is addressed by. Either way exactly one slot
+ // immediate is consumed; only how much of the slot is read differs.
+@@ -721,6 +728,24 @@
+ }
+ 
+ 
++#ifdef QJS_GUEST_WASM
++d_m3Op(SetGlobalRef_r)
++{
++    M3Global* global = immediate(M3Global*);
++    m3ret_t r = qwasm_global_update(global, (void*)(uintptr_t)_r0);
++    if (M3_UNLIKELY(r)) newTrap(r);
++    nextOp();
++}
++d_m3Op(SetGlobalRef_s)
++{
++    M3Global* global = immediate(M3Global*);
++    void* value = slot(void*);
++    m3ret_t r = qwasm_global_update(global, value);
++    if (M3_UNLIKELY(r)) newTrap(r);
++    nextOp();
++}
++#endif
++
+ d_m3Op(SetGlobal_i32)
+ {
+     u32* global = immediate(u32*);
+@@ -784,7 +809,7 @@
+     m3ret_t     r = m3Err_none;
+ 
+     if (M3_LIKELY(function)) {
+-        if (M3_LIKELY(type == function->funcType)) {
++        if (M3_LIKELY(d_m3FunctionTypesEqual(type, function->funcType))) {
+             if (M3_UNLIKELY(not function->compiled)) {
+                 r = CompileFunction(function);
+             }
+@@ -854,7 +879,7 @@
+         IM3Function function = (IM3Function)table->elements[tableIndex];
+ 
+         if (M3_LIKELY(function)) {
+-            if (M3_LIKELY(type == function->funcType)) {
++            if (M3_LIKELY(d_m3FunctionTypesEqual(type, function->funcType))) {
+                 if (M3_UNLIKELY(not function->compiled)) {
+                     r = CompileFunction(function);
+                 }
+@@ -865,11 +890,18 @@
+                     M3MemoryHeader* calleeMem = Module_MemoryHeader(function->module);
+                     d_m3FrameEnter();
+ 
++#ifdef QJS_GUEST_WASM
++                    if (function->module->runtime != m3MemRuntime(_mem)) {
++                        r = qwasm_call_indirect(function, sp, m3MemRuntime(_mem));
++                    } else
++#endif
++                    {
+ #if (d_m3EnableOpProfiling || d_m3EnableOpTracing)
+                     r = Call(function->compiled, sp, calleeMem, d_m3OpDefaultArgs, d_m3BaseCstr);
+ #else
+                     r = Call(function->compiled, sp, calleeMem, d_m3OpDefaultArgs);
+ #endif
++                    }
+ 
+                     _mem = memory->mallocated;
+                     d_m3FrameLeave();
+@@ -941,7 +973,7 @@
+     m3ret_t     r = m3Err_none;
+ 
+     if (M3_LIKELY(function)) {
+-        if (M3_LIKELY(type == function->funcType)) {
++        if (M3_LIKELY(d_m3FunctionTypesEqual(type, function->funcType))) {
+             if (M3_UNLIKELY(not function->compiled)) {
+                 r = CompileFunction(function);
+             }
+@@ -981,7 +1013,7 @@
+         IM3Function function = (IM3Function)table->elements[tableIndex];
+ 
+         if (M3_LIKELY(function)) {
+-            if (M3_LIKELY(type == function->funcType)) {
++            if (M3_LIKELY(d_m3FunctionTypesEqual(type, function->funcType))) {
+                 if (M3_UNLIKELY(not function->compiled)) {
+                     r = CompileFunction(function);
+                 }
+@@ -992,6 +1024,12 @@
+                     if (M3_LIKELY(not r)) {
+                         d_m3TailCallArgs(returnSlots, stackOffset, numArgSlots);
+ 
++#ifdef QJS_GUEST_WASM
++                        if (function->module->runtime != m3MemRuntime(_mem)) {
++                            r = qwasm_call_indirect(function, _sp, m3MemRuntime(_mem));
++                            forwardTrap(r);
++                        }
++#endif
+                         jumpOpDirect(function->compiled);
+                     }
+                 }
+@@ -1381,7 +1419,8 @@
+     u64      index = d_m3WideOperand(table->isTable64);
+ 
+     if (M3_LIKELY(index < table->size)) {
+-        table->elements[index] = value;
++        m3ret_t r = Table_Set(table, (u32)index, value);
++        if (M3_UNLIKELY(r)) newTrap(r);
+         nextOp();
+     } else {
+         newTrap(m3Err_trapTableOutOfBounds);
+@@ -1420,6 +1459,12 @@
+     }
+ 
+     if (newSize <= maxSize) {
++#ifdef QJS_GUEST_WASM
++        if (qwasm_table_prepare(table, (u32)newSize)) {
++            _r0 = -1;
++            nextOp();
++        }
++#endif
+         void** elements = m3_ReallocArray(void*, table->elements, (size_t)newSize, oldSize);
+ 
+         if (elements) {
+@@ -1427,7 +1472,8 @@
+             table->size = (u32)newSize;
+ 
+             for (u32 i = oldSize; i < table->size; ++i) {
+-                table->elements[i] = value;
++                m3ret_t r = Table_Set(table, i, value);
++                if (M3_UNLIKELY(r)) newTrap(r);
+             }
+ 
+             _r0 = oldSize;
+@@ -1458,7 +1504,8 @@
+     if (M3_LIKELY(destination <= table->size and count <= table->size - destination and
+                   (u64) source + count <= available)) {
+         for (u32 i = 0; i < count; ++i) {
+-            table->elements[destination + i] = segment->resolved[source + i];
++            m3ret_t r = Table_Set(table, (u32)destination + i, segment->resolved[source + i]);
++            if (M3_UNLIKELY(r)) newTrap(r);
+         }
+ 
+         nextOp();
+@@ -1489,7 +1536,11 @@
+ 
+     if (M3_LIKELY(destination <= dst->size and count <= dst->size - destination and
+                   source <= src->size and count <= src->size - source)) {
+-        memmove(dst->elements + destination, src->elements + source, (size_t)count * sizeof(void*));
++        for (u64 n = 0; n < count; ++n) {
++            u64 i = dst == src && destination > source ? count - 1 - n : n;
++            m3ret_t r = Table_Set(dst, (u32)(destination + i), src->elements[source + i]);
++            if (M3_UNLIKELY(r)) newTrap(r);
++        }
+ 
+         nextOp();
+     } else {
+@@ -1507,7 +1558,8 @@
+ 
+     if (M3_LIKELY(index <= table->size and count <= table->size - index)) {
+         for (u64 i = 0; i < count; ++i) {
+-            table->elements[index + i] = value;
++            m3ret_t r = Table_Set(table, (u32)(index + i), value);
++            if (M3_UNLIKELY(r)) newTrap(r);
+         }
+ 
+         nextOp();
+--- a/source/m3_compile.c
++++ b/source/m3_compile.c
+@@ -1734,7 +1734,15 @@
+             op = Is64BitType(type) ? op_SetGlobal_s64 : op_SetGlobal_s32;
+         }
+ 
++#ifdef QJS_GUEST_WASM
++        bool reference = BaseTypeOf(i_global->type) == c_m3Type_funcref || BaseTypeOf(i_global->type) == c_m3Type_externref;
++        if (reference) op = IsStackTopInRegister(o) ? op_SetGlobalRef_r : op_SetGlobalRef_s;
++#endif
+ _       (EmitOp(o, op));
++#ifdef QJS_GUEST_WASM
++        if (reference) EmitPointer(o, i_global);
++        else
++#endif
+         EmitPointer(o, &i_global->i64Value);
+ 
+         if (IsStackTopInSlot(o)) {

@@ -1,0 +1,10 @@
+--- a/source/m3_env.c
++++ b/source/m3_env.c
+@@ -802,1 +802,1 @@
+-        if (io_runtime->memoryLimit) {
++        if (io_runtime and io_runtime->memoryLimit) {
+@@ -863,1 +863,3 @@
+-        memory->mallocated->maxStack = (m3slot_t*)io_runtime->originStack + io_runtime->numStackSlots;
++        memory->mallocated->maxStack = io_runtime
++                                         ? (m3slot_t*)io_runtime->originStack + io_runtime->numStackSlots
++                                         : NULL;

@@ -1,0 +1,11 @@
+{
+  "version": "1.2.9",
+  "lockSHA256": "0c622ef5512c6aa25b92da14556566c929c3b583526b3482b51dbdc225615b46",
+  "inputs": {
+    "@rolldown/binding-wasm32-wasi/rolldown-binding.wasm32-wasi.wasm": "629aa10c37a9920cd5729a35af148983c881f4ff9edd6368a7d63b5acbf89dc2",
+    "@rolldown/binding-wasm32-wasi/wasi-worker-browser.mjs": "c75b826181d93cfa9df7a5e5212a353ad965be363149db634478c618196fe30c",
+    "@napi-rs/wasm-runtime/runtime.js": "5fd49a37e1e817f7498bb8e5bed5ad2c322823fff50488674254bf749e4a8ba2",
+    "@napi-rs/wasm-runtime/dist/fs.js": "0d4b8c98dea82828883a29c6dd07b31b7d1d0f23ae7854ebc464a0d3a3d9cedf",
+    "@emnapi/runtime/dist/emnapi.js": "1354fd5724a9e585d1fb99da835b85955d8636919c27e48008745c416273d5b8"
+  }
+}

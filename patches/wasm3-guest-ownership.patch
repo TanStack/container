@@ -1,0 +1,60 @@
+diff --git a/source/m3_core.c b/source/m3_core.c
+--- a/source/m3_core.c
++++ b/source/m3_core.c
+@@ -141,7 +141,7 @@
+     return newPtr;
+ }
+ 
+-#else
++#elif !defined(QJS_GUEST_WASM)
+ 
+ void* m3_Malloc_Impl (size_t i_size)
+ {
+diff --git a/source/m3_core.h b/source/m3_core.h
+--- a/source/m3_core.h
++++ b/source/m3_core.h
+@@ -313,5 +313,10 @@
+ 
++#ifdef QJS_GUEST_WASM
++#define m3_Malloc_Impl qwasm_malloc
++#define m3_Realloc_Impl qwasm_realloc
++#define m3_Free_Impl qwasm_free
++#endif
+ void* m3_Malloc_Impl (size_t i_size);
+ void* m3_Realloc_Impl (void* i_ptr, size_t i_newSize, size_t i_oldSize);
+ void  m3_Free_Impl (void* i_ptr);
+ 
+diff --git a/source/m3_env.h b/source/m3_env.h
+--- a/source/m3_env.h
++++ b/source/m3_env.h
+@@ -44,5 +44,6 @@
+     M3MemoryHeader*  mallocated;
+ 
++    u64              generation;
+     u64              numPages;
+     u64              maxPages;
+     u64              initPages;
+diff --git a/source/m3_env.c b/source/m3_env.c
+--- a/source/m3_env.c
++++ b/source/m3_env.c
+@@ -856,6 +856,7 @@
+ #endif
+ 
+         memory->numPages = numPagesToAlloc;
++        memory->generation++;
+ 
+         memory->mallocated->length  = (size_t)numPageBytes;
+         memory->mallocated->runtime = io_runtime;
+diff --git a/source/m3_exec.h b/source/m3_exec.h
+--- a/source/m3_exec.h
++++ b/source/m3_exec.h
+@@ -1563,5 +1563,9 @@
+     u32        cost = immediate(u32);
+ 
++#ifdef QJS_GUEST_WASM
++    extern int qwasm_poll(void);
++    if (qwasm_poll()) newTrap("interrupted");
++#endif
+     runtime->gasRemaining -= (i64)cost;
+ 
+     if (M3_UNLIKELY(runtime->gasRemaining < 0)) {

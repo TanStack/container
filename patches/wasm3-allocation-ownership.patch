@@ -1,0 +1,56 @@
+diff --git a/source/m3_module.c b/source/m3_module.c
+--- a/source/m3_module.c
++++ b/source/m3_module.c
+@@ -180,2 +180,3 @@
+-    io_module->memories = m3_ReallocArray(IM3Memory, io_module->memories, index + 1, index);
+-    _throwifnull(io_module->memories);
++    IM3Memory* memories = m3_ReallocArray(IM3Memory, io_module->memories, index + 1, index);
++    _throwifnull(memories);
++    io_module->memories = memories;
+@@ -218,2 +219,3 @@
+-    io_module->tables = m3_ReallocArray(IM3Table, io_module->tables, index + 1, index);
+-    _throwifnull(io_module->tables);
++    IM3Table* tables = m3_ReallocArray(IM3Table, io_module->tables, index + 1, index);
++    _throwifnull(tables);
++    io_module->tables = tables;
+@@ -250,5 +252,7 @@
+-    u32 index = io_module->numTags++;
++    u32 index = io_module->numTags;
+ 
+-    io_module->tags = m3_ReallocArray(M3Tag, io_module->tags, io_module->numTags, index);
+-    _throwifnull(io_module->tags);
++    M3Tag* tags = m3_ReallocArray(M3Tag, io_module->tags, index + 1, index);
++    _throwifnull(tags);
++    io_module->tags = tags;
++    io_module->numTags = index + 1;
+     M3Tag* tag = &io_module->tags[index];
+@@ -273,5 +277,7 @@
+-    u32 index = io_module->numGlobals++;
++    u32 index = io_module->numGlobals;
+ 
+-    io_module->globals = m3_ReallocArray(M3Global, io_module->globals, io_module->numGlobals, index);
+-    _throwifnull(io_module->globals);
++    M3Global* globals = m3_ReallocArray(M3Global, io_module->globals, index + 1, index);
++    _throwifnull(globals);
++    io_module->globals = globals;
++    io_module->numGlobals = index + 1;
+     M3Global* global = &io_module->globals[index];
+@@ -294,5 +300,6 @@
+     if (i_totalFunctions > io_module->allFunctions) {
+-        io_module->functions    = m3_ReallocArray(M3Function, io_module->functions, i_totalFunctions, io_module->allFunctions);
++        M3Function* functions = m3_ReallocArray(M3Function, io_module->functions, i_totalFunctions, io_module->allFunctions);
++        _throwifnull(functions);
++        io_module->functions = functions;
+         io_module->allFunctions = i_totalFunctions;
+-        _throwifnull(io_module->functions);
+     }
+@@ -306,6 +313,7 @@
+ 
+-    u32 index = io_module->numFunctions++;
+-_   (Module_PreallocFunctions(io_module, io_module->numFunctions));
++    u32 index = io_module->numFunctions;
++_   (Module_PreallocFunctions(io_module, index + 1));
+ 
+     _throwif("type sig index out of bounds", i_typeIndex >= io_module->numFuncTypes);
++    io_module->numFunctions = index + 1;
+ 

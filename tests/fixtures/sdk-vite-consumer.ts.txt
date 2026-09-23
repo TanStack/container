@@ -1,0 +1,32 @@
+import {SDK_COMPATIBILITY,WorkerKernel,runMvdanShell} from '@tanstack/browser-sandbox-experimental'
+
+const output=document.querySelector('#result')!
+const result:any=(window as any).result={status:'running',stage:'create',checks:{}}
+const publish=()=>{output.textContent=JSON.stringify(result,null,2)}
+let kernel:WorkerKernel|undefined
+async function run(){
+  try{
+    result.checks.compatibility=SDK_COMPATIBILITY
+    if(SDK_COMPATIBILITY.apiVersion!==6||SDK_COMPATIBILITY.stability!=='experimental')throw Error('SDK compatibility contract mismatch')
+    kernel=new WorkerKernel({
+      '/project/package.json':'{}',
+      '/input.txt':'rebundled SDK',
+      '/main.mjs':`import fs from 'node:fs';console.log(fs.readFileSync('/input.txt','utf8'))`,
+      '/entry.ts':'const answer:number=42;console.log(answer)',
+    },{assetBaseURL:new URL('./runtime/',document.baseURI).href})
+    result.stage='module';publish()
+    result.checks.module=await kernel.runModule('/main.mjs',{webAPIs:true})
+    if(result.checks.module.exitCode!==0||result.checks.module.stdout!=='rebundled SDK\n')throw Error('Module result mismatch: '+JSON.stringify(result.checks.module))
+    result.stage='compile';publish()
+    result.checks.compiled=await kernel.run('/entry.ts')
+    if(result.checks.compiled.exitCode!==0||result.checks.compiled.stdout!=='42\n')throw Error('TypeScript result mismatch: '+JSON.stringify(result.checks.compiled))
+    result.stage='shell';publish()
+    const shell=await runMvdanShell(kernel,`node /main.mjs | node -e 'process.stdin.on("data",chunk=>process.stdout.write(chunk))'`,{timeoutMs:30000})
+    result.checks.shell={code:shell.code,stdout:new TextDecoder().decode(shell.stdout),stderr:new TextDecoder().decode(shell.stderr),error:shell.error}
+    if(shell.code!==0||result.checks.shell.stdout!=='rebundled SDK\n'||shell.error)throw Error('Shell result mismatch: '+JSON.stringify(result.checks.shell))
+    result.status='passed';result.stage='complete'
+  }catch(error){
+    result.status='failed';result.error=error instanceof Error?{name:error.name,message:error.message,stack:error.stack}:String(error)
+  }finally{kernel?.close();publish()}
+}
+void run()

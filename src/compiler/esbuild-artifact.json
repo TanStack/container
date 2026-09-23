@@ -1,0 +1,10 @@
+{
+  "version": "0.28.2",
+  "hashes": {
+    "bin/esbuild": "b3cdaf234fd51a7908b2ffc4a84b3baa466656ccb2586498de4cc2f77b6f1e1e",
+    "lib/main.js": "81bf0c392dff41ea8e43c113731c1ebfa31b020d310407e8e3f0c0b65cc2d408",
+    "wasm_exec_node.js": "86b8ce546ecaa462544f3736adc4c19264eedd257c2ec427c9abc6debc1ee184",
+    "wasm_exec.js": "0c949f4996f9a89698e4b5c586de32249c3b69b7baadb64d220073cc04acba14",
+    "esbuild.wasm": "b1831a5c0f6cf688034fb94d0419812f165ea316a3380d3fc00a151e562d2eaf"
+  }
+}

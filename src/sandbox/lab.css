@@ -1,0 +1,92 @@
+:root {
+  font:
+    15px system-ui,
+    sans-serif;
+  color: #e5e9f0;
+  background: #11151b;
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  max-width: 1200px;
+  margin: 40px auto;
+  padding: 0 24px;
+}
+h1 {
+  font-size: 24px;
+  letter-spacing: -0.5px;
+  margin: 0 0 12px;
+}
+p {
+  color: #abb5c4;
+  margin: 0 0 24px;
+}
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+button {
+  font: inherit;
+  padding: 10px 14px;
+  background: #253347;
+  border: 1px solid #445570;
+  border-radius: 6px;
+  cursor: pointer;
+}
+button:hover {
+  background: #30435c;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+a {
+  color: #a9c7ff;
+  margin-left: auto;
+}
+.panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+pre {
+  font:
+    13px/1.7 ui-monospace,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  background: #171e28;
+  border: 1px solid #303d4f;
+  padding: 20px;
+  min-height: 320px;
+  border-radius: 8px;
+}
+iframe {
+  border: 1px solid #303d4f;
+  background: white;
+  width: 100%;
+  height: 380px;
+  border-radius: 8px;
+  color-scheme: light;
+}
+iframe[hidden] {
+  display: none;
+}
+@media (max-width: 760px) {
+  body {
+    margin: 24px auto;
+    padding: 0 16px;
+  }
+  .panels {
+    grid-template-columns: 1fr;
+  }
+  a {
+    margin: 8px 0 0;
+  }
+}

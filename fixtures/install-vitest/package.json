@@ -1,0 +1,8 @@
+{
+  "name": "installed-vitest-probe",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "devDependencies": {"vitest": "3.2.7", "vite": "7.3.6"},
+  "overrides": {"rollup": "npm:@rollup/wasm-node@4.63.1", "esbuild": "npm:esbuild-wasm@0.28.2"}
+}

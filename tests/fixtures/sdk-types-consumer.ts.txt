@@ -1,0 +1,92 @@
+import {AgentSession,SDK_COMPATIBILITY,WorkerKernel,WorkerHTTP,WorkerWebSocket,URLPreview,runMvdanShell,runShell,installProjectCommand,spawnProjectCommand} from '@tanstack/browser-sandbox-experimental'
+import type {AgentWorkspaceSnapshot,AgentWorkspaceBinarySnapshot,AgentSnapshotOptions,KernelOwnerOptions,KernelExecutionResult,KernelProcessHandle,WorkspaceSnapshot,CheckpointMetadata,SpawnOptions,ProcessEvent,ShellResult,ShellOptions,ShellExecutionOptions,ShellExecutionResult,ProjectInstallResult,PortEvent,InstallProjectCommandOptions,SpawnProjectCommandOptions} from '@tanstack/browser-sandbox-experimental'
+
+const options:KernelOwnerOptions={cooperative:true,assetBaseURL:new URL('./runtime/',import.meta.url).href,workspace:{maxFiles:100}}
+const kernel=new WorkerKernel({'/main.js':'console.log(42)'},options)
+const apiVersion:6=SDK_COMPATIBILITY.apiVersion
+const stability:'experimental'=SDK_COMPATIBILITY.stability
+const listeningPorts:number[]=kernel.listeningPorts
+const unsubscribePorts:()=>void=kernel.subscribePorts((event:PortEvent)=>{
+  const transition:'open'|'close'=event.type
+  event.port.toFixed()
+  void transition
+})
+unsubscribePorts()
+// @ts-expect-error port notifications do not promise HTTP readiness
+const readyPort:PortEvent={type:'server-ready',port:3000}
+// @ts-expect-error virtual ports are numeric
+const stringPort:PortEvent={type:'open',port:'3000'}
+const snapshot:WorkspaceSnapshot=await kernel.snapshot()
+await kernel.restore(snapshot)
+const agent=new AgentSession({'/main.js':'console.log(42)'},options)
+const agentSnapshot:AgentWorkspaceSnapshot=await agent.snapshot()
+const encoded:string|undefined=agentSnapshot.files['/main.js']?.base64
+if(agentSnapshot.version===5)agentSnapshot.directoryModes['/'].toFixed()
+await agent.restore({snapshot:agentSnapshot})
+const binaryOptions={encoding:'binary'} as const satisfies AgentSnapshotOptions
+const agentBinarySnapshot:AgentWorkspaceBinarySnapshot=await agent.snapshot(binaryOptions)
+const binaryBytes:Uint8Array|undefined=agentBinarySnapshot.files['/main.js']
+await agent.restore({snapshot:agentBinarySnapshot})
+const dynamicOptions:AgentSnapshotOptions=Math.random()>0.5?{encoding:'binary'}:{encoding:'base64'}
+const dynamicSnapshot:AgentWorkspaceSnapshot|AgentWorkspaceBinarySnapshot=await agent.snapshot(dynamicOptions)
+// @ts-expect-error agent snapshots contain base64 JSON objects, not byte arrays
+const binarySnapshot:WorkspaceSnapshot=await agent.snapshot()
+// @ts-expect-error snapshot encoding must be base64 or binary
+await agent.snapshot({encoding:'gzip'})
+void encoded;void binaryBytes;void dynamicSnapshot
+await agent.close()
+const saved:CheckpointMetadata=await kernel.saveCheckpoint('workspace')
+const metadata:CheckpointMetadata|undefined=await kernel.checkpointMetadata('workspace')
+const restored:CheckpointMetadata=await kernel.restoreCheckpoint('workspace')
+const deleted:boolean=await kernel.deleteCheckpoint('workspace')
+void saved;void metadata;void restored;void deleted
+await kernel.writeFile('/bytes',new Uint8Array([42]))
+const result:KernelExecutionResult=await kernel.run('/main.js',{writable:true,onOutput(level,text){level.toUpperCase();text.trim()}})
+result.stdout.toUpperCase()
+const installed:ProjectInstallResult=await kernel.install({ignoreScripts:true})
+installed.ignoredScripts.map(script=>script.trim())
+const spawnOptions:SpawnOptions={stdio:['pipe','pipe','ignore'],lifetime:'session',env:{MODE:'test'}}
+const child=await kernel.spawn('node',['/main.js'],spawnOptions)
+const event:ProcessEvent|null=await child.next()
+if(event?.type==='exit')event.code?.toFixed()
+else if(event?.type==='stdout'||event?.type==='stderr')event.bytes.slice()
+else if(event?.type==='error')event.error.message
+else event?.type
+await child.write('input');await child.end();await child.wait();await child.dispose()
+const persistentShell:KernelProcessHandle=await kernel.spawnShell('node /main.js',spawnOptions)
+await persistentShell.dispose()
+const installCommandOptions:InstallProjectCommandOptions={cwd:'/project',ignoreScripts:true}
+await installProjectCommand(kernel,'pnpm install',installCommandOptions)
+const projectCommandOptions:SpawnProjectCommandOptions={cwd:'/project',lifetime:'session'}
+const projectCommand:KernelProcessHandle=await spawnProjectCommand(kernel,'pnpm run dev',projectCommandOptions)
+await projectCommand.dispose()
+const shell:ShellResult=await runMvdanShell(kernel,'echo hi',{writable:true})
+shell.stdout.slice()
+const shellOptions:ShellExecutionOptions={cwd:'/project',env:{GREETING:'hi'},stdin:new Uint8Array([42]),writable:true,timeoutMs:10000,signal:new AbortController().signal}
+const legacyOptions:ShellOptions=shellOptions
+const execution:ShellExecutionResult=await runShell(kernel,'node main.js',shellOptions)
+execution.exitCode.toFixed();execution.stdout.slice();execution.stderr.slice()
+await runMvdanShell(kernel,'printf hello',legacyOptions)
+// @ts-expect-error stdin is bytes, not an implicitly encoded string
+runShell(kernel,'cat',{stdin:'hello'})
+// @ts-expect-error environment values must be strings
+runShell(kernel,'echo',{env:{VALUE:42}})
+// @ts-expect-error public result uses exitCode, not the legacy code field
+execution.code
+// @ts-expect-error signal must be an AbortSignal
+runShell(kernel,'echo',{signal:true})
+const response:Response=await new WorkerHTTP(kernel,3000).fetch(new Request('https://preview.invalid/'))
+await response.text()
+const socket=await WorkerWebSocket.connect(kernel,3000,'https://preview.invalid','ws://preview.invalid/socket')
+await socket.close()
+const mount:typeof URLPreview.mount=URLPreview.mount
+void mount
+// @ts-expect-error owner byte limit is numeric
+new WorkerKernel({}, {maxBytes:'unlimited'})
+// @ts-expect-error files are text or bytes, never arbitrary objects
+new WorkerKernel({'/bad':{value:true}})
+// @ts-expect-error process lifetime cannot silently invent a policy
+kernel.spawn('node',[],{lifetime:'forever'})
+// @ts-expect-error readFile promises bytes, not a text string
+const text:string=await kernel.readFile('/bytes')
+kernel.close()
