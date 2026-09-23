@@ -37,6 +37,9 @@ ${fromStringLength}`)
       const writeFunction='function utf8Write (buf, string, offset, length) {\n  return blitBuffer(utf8ToBytes(string, buf.length - offset), buf, offset, length)\n}'
       if(writeStart<0||!contents.includes(writeFunction))throw Error('Buffer UTF-8 writer changed')
       contents=contents.replace(writeFunction,readFileSync('src/compiler/buffer-utf8-write.js','utf8'))
+      const utf16WriteFunction='function ucs2Write (buf, string, offset, length) {\n  return blitBuffer(utf16leToBytes(string, buf.length - offset), buf, offset, length)\n}'
+      if(contents.split(utf16WriteFunction).length!==2)throw Error('Buffer UTF-16 writer changed')
+      contents=contents.replace(utf16WriteFunction,readFileSync('src/compiler/buffer-utf16-write.js','utf8'))
       if(contents.split('utf8ToBytes(string).length').length!==3)throw Error('Buffer UTF-8 length dispatch changed')
       contents=contents.replaceAll('utf8ToBytes(string).length','utf8Encode(string)')
       // The existing base64 decoder already accepts both alphabets. Register

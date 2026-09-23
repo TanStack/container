@@ -39,3 +39,8 @@ jobs:
             tests/sdk-external-assets.test.mjs \
             tests/runtime-package-setup.test.mjs \
             tests/sdk-split-adoption.test.mjs
+      - name: Check guest Buffer compatibility against Node
+        run: |
+          node --test --test-concurrency=1 \
+            tests/guest-buffer-native-utf8.test.mjs \
+            tests/guest-buffer-utf16-write.test.mjs
