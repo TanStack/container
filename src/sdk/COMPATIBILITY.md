@@ -1,18 +1,45 @@
 # Workflow compatibility
 
-This is an experimental alpha with bounded results. The package's
-`candidate-compatibility.json` is
-the authoritative matrix for its exact `manifest.json`. It records Chromium,
-Firefox, actual Safari and Playwright WebKit separately, with cold and resumed
-Vite and TanStack Start results. `release-record.json` binds that matrix to the
-manifest and source archive. A passed cell means the referenced repeated
-workflow evidence was audited for that exact artifact. An unverified cell means
-the package makes no compatibility claim for it.
+This is experimental software with bounded, artifact-specific results. Each
+split package contains `package-assets.json`, which records its own file bytes
+and hashes. Explicit asset setup writes `deployment-manifest.json`, binding the
+prepared browser files to the runtime package manifest. These inventories prove
+file identity, not that an application works.
 
-The Vite workflow covers a pinned Vite 7 app with registry installation,
+Browser acceptance is separate evidence bound to both package manifest hashes,
+both npm tarball hashes and the prepared deployment hash. Split packages do not
+ship the legacy `manifest.json`, `candidate-compatibility.json` or
+`release-record.json`. Do not look for those files to determine split-package
+support, and do not transfer passing results between different package pairs.
+
+## Verified split candidate
+
+Source-bound candidate `JIhQsM`, version `0.1.0-alpha.0`, passes twelve strict
+workflows: three Vite and three Start cold/save/offline-resume cycles in each of
+Chromium and Firefox, with no retries. The audit verifies byte-exact workspace
+restoration, blocked external dependency requests during resume, further edits
+and interactions, acknowledged shutdown and resource cleanup. All twelve
+prepared deployments match the adoption check's deployment bytes.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| SDK package manifest | `caafa72a28ec76aaf7396848cadadce1ab489993bdd67f83447a0ffd93295e09` |
+| Runtime package manifest | `02ffb4ab94c67fab1bb0df20a231c422e0eaa087a7714fea69d06dcbd1275aa5` |
+| SDK npm tarball | `7d2f036e70f281ed7516eb49814e2035ca4c0de48b1505c436467fefd1e9d14d` |
+| Runtime npm tarball | `69fb066ba08bbbf41f7d341eb58e3267faf1b9697264ffdf7680382274015b6b` |
+| Prepared deployment manifest | `8cec6912bb9c671b0be45861ed4d2e6db6d4d9b0f0d974cf97a1ef3dbb6c5ed3` |
+| Source archive | `2bc2c13215115abfb7adbfcc74105f92cebffbe354e3165ddeec1d1d384467c1` |
+
+Actual Safari acceptance remains unverified. This is not release approval,
+publication or production TanStack.com integration evidence. This document is
+a summary, not the external audit itself; the retained audit is named
+`sdk-split-JIhQsM-strict-audit.json` and is not shipped inside the SDK. Editing
+this guide does not change the frozen candidate or accept a later rebuild.
+
+The strict Vite workflow covers a pinned Vite 7 app with registry installation,
 negative and positive tests, interactive preview, state-preserving HMR, save,
-owner reload and byte-exact offline resume. The Start workflow covers the
-shipped pinned TanStack Start app with SSR, hydration, a POST server function,
+owner reload and byte-exact offline resume. The strict Start workflow covers a
+pinned TanStack Start fixture with SSR, hydration, a POST server function,
 navigation, route live edit, save, owner reload and offline resume. These are
 representative workflows, not claims that every Vite plugin, Start feature or
 Node package works. Playwright WebKit evidence never substitutes for actual
@@ -25,6 +52,16 @@ examples use Vite 7.3.6, Rollup WASM 4.63.1 and esbuild WASM 0.28.2. The Start
 example uses `@tanstack/react-start` 1.168.25 and Lightning CSS WASM 1.33.0.
 The separate real Start/Vite 8 counter test is not that packaged example.
 Installed dependencies alone do not establish that their APIs or CLI work.
+
+The strict JIhQsM runs are separate consumers, not execution of the packaged
+example UI. Their Vite fixture is `fixtures/install-vitest`, pinned to Vite
+7.3.6 with the same Rollup/esbuild WASM overrides. Although its lock includes
+Vitest 3.2.7, the workflow runs `node check.mjs`, not Vitest. The strict Start
+consumer combines `fixtures/install-start-wasm` with `fixtures/start-basic`
+app source: Start 1.168.25, Router 1.170.15, React 19.1.1, Vite 7.3.6 and the
+same Rollup/esbuild/Lightning CSS WASM versions listed above. Public example
+results must be recorded separately; these strict passes do not imply that
+every test runner, framework feature or dependency version works.
 
 The framework example explicitly enables the compiler worker and selects the
 engine matching the artifact's build profile. Fiber profiles require
@@ -51,11 +88,13 @@ Keep existing permissions and resource limits enabled. This experiment is not
 a production security boundary for arbitrary hostile projects, and should not
 contain sensitive projects or credentials.
 
-## Recorded candidate evidence
+## Legacy all-in-one candidate history
 
-These paths identify records in the source repository, not files shipped in
-the SDK. The package's own `candidate-compatibility.json` remains the authority
-for a downloaded artifact.
+Everything below describes older all-in-one packages, not the current split
+layout. Their `manifest.json` and `candidate-compatibility.json` conventions
+apply only to those historical artifacts. Record paths are archival identifiers,
+not files shipped in the SDK or guaranteed to be present in a public checkout.
+None of these results accepts a new split package or establishes release status.
 
 - **p11JMm**, unpublished package version `0.0.0`, manifest SHA256
   `8608d7e16abb9b1788d8d5d5b1009e2231a9385533410041115be0c8bc009c06`:
