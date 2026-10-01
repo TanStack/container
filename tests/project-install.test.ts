@@ -133,7 +133,8 @@ test('Vite plugin peer range accepts the installed Vite version',()=>{
   expect(satisfies(vite.version,plugin.peerDependencies.vite)).toBe(true)
 })
 test('native npm lock control nests a conflicting transitive version under its requester',()=>{
-  const lock=JSON.parse(readFileSync('package-lock.json','utf8')).packages
+  // Keep the npm-generated conflict independent from the repo's current graph.
+  const lock=JSON.parse(readFileSync('tests/fixtures/npm-lock-conflict.json','utf8')).packages
   const root=lock['node_modules/@babel/code-frame'],core=lock['node_modules/@babel/core'],nested=lock['node_modules/@babel/core/node_modules/@babel/code-frame']
   expect(satisfies(root.version,core.dependencies['@babel/code-frame'])).toBe(false)
   expect(satisfies(nested.version,core.dependencies['@babel/code-frame'])).toBe(true)
