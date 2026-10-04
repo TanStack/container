@@ -46,12 +46,16 @@ declare module 'crypto-browserify'
 declare module 'https-browserify'
 declare module 'os-browserify/browser'
 declare module 'stream-browserify'
+declare module 'tty-browserify'
+declare module 'querystring-es3'
 declare module 'stream-http'
 declare module 'browserify-zlib'
 declare module 'assert'
 declare module 'events'
 declare module 'util'
+declare module 'util/util.js'
 declare module 'picomatch'
+declare module 'vm-browserify'
 
 type BufferEncoding =
   | 'ascii' | 'utf8' | 'utf-8' | 'utf16le' | 'ucs2' | 'ucs-2'
@@ -60,3 +64,19 @@ type BufferEncoding =
 declare const __START_CLIENT_ENTRY__: string
 declare const __START_SERVER_ENTRY__: string
 declare const __START_INSTANCE_ENTRY__: string
+declare const __VITE_CLIENT_ENTRY__: string
+declare const __BROWSER_VITE_PACKAGE_JSON__: string
+declare const __VITE_ENV_ENTRY__: string
+declare const __BROWSER_ROLLDOWN_VERSION__: string
+declare const __BROWSER_VITE_VERSION__: string
+declare const __BROWSER_LIGHTNINGCSS_VERSION__: string
+declare const __BROWSER_PRETTIER_VERSION__: string
+declare module '@rolldown/browser'
+declare module '@rolldown/browser/parseAst'
+declare module '@rolldown/browser/plugins'
+declare module '@rolldown/browser/experimental'
+declare module '@rolldown/browser/utils'
+declare module '@rolldown/browser/filter'
+declare module '@rolldown/browser/getLogFilter'
+declare module '@rolldown/browser/config'
+declare module '@rolldown/browser/parallelPlugin'

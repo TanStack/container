@@ -4,7 +4,8 @@ export type WorkspaceSnapshot = {version:1;files:Record<string,Uint8Array>} |
   {version:2;files:Record<string,Uint8Array>;directories:string[]} |
   {version:3;files:Record<string,Uint8Array>;directories:string[];symlinks:Record<string,string>} |
   {version:4;files:Record<string,Uint8Array>;directories:string[];symlinks:Record<string,string>;fileModes:Record<string,number>} |
-  {version:5;files:Record<string,Uint8Array>;directories:string[];symlinks:Record<string,string>;fileModes:Record<string,number>;directoryModes:Record<string,number>}
+  {version:5;files:Record<string,Uint8Array>;directories:string[];symlinks:Record<string,string>;fileModes:Record<string,number>;directoryModes:Record<string,number>;
+    fileTimes?:Record<string,{atimeMs:number;mtimeMs:number}>;directoryTimes?:Record<string,{atimeMs:number;mtimeMs:number}>}
 
 export interface WorkspaceChange {path:string;eventType:'rename'|'change'}
 
@@ -141,18 +142,18 @@ export class WorkspaceFiles implements VirtualFileSystem {
     this.#listeners.add(listener)
     return ()=>{this.#listeners.delete(listener)}
   }
-  #notify(path:string,eventType:WorkspaceChange['eventType']) {
+  #notify(path:string,eventType:WorkspaceChange['eventType'],preserveTime?:{self:boolean;parent:boolean}) {
     const metadata=this.#metadata.get(path),now=Date.now()
     if(metadata){
       metadata.ctimeMs=now
-      if(eventType==='change')metadata.mtimeMs=now
+      if(eventType==='change'&&!preserveTime?.self)metadata.mtimeMs=now
       if(!this.#files.has(path)&&!this.#directories.has(path)&&!this.#symlinks.has(path)){
         metadata.nlink=0;this.#metadata.delete(path)
       }
     }
     if(eventType==='rename'&&path!=='/'){
       const parent=this.#metadata.get(this.#parent(path))
-      if(parent)parent.mtimeMs=parent.ctimeMs=now
+      if(parent){parent.ctimeMs=now;if(!preserveTime?.parent)parent.mtimeMs=now}
     }
     const event=Object.freeze({path,eventType})
     for(const listener of [...this.#listeners])listener(event)
@@ -173,6 +174,12 @@ export class WorkspaceFiles implements VirtualFileSystem {
       version: 5,
       directoryModes:Object.fromEntries([...this.#directories].map(path=>[path,this.#metadata.get(path)?.permissions??0o755])),
       fileModes:Object.fromEntries([...this.#files].map(([path,node])=>[path,node.metadata.permissions??0o644])),
+      directoryTimes:Object.fromEntries([...this.#directories].map(path=>{
+        const metadata=this.#metadata.get(path)!
+        return [path,{atimeMs:metadata.atimeMs,mtimeMs:metadata.mtimeMs}]
+      })),
+      fileTimes:Object.fromEntries([...this.#files].map(([path,node])=>
+        [path,{atimeMs:node.metadata.atimeMs,mtimeMs:node.metadata.mtimeMs}])),
       directories: [...this.#directories].filter(path=>path!=='/').sort(),
       symlinks: Object.fromEntries(this.#symlinks),
       files: Object.fromEntries(
@@ -240,6 +247,19 @@ export class WorkspaceFiles implements VirtualFileSystem {
       for(const [path,mode] of Object.entries(modes)){
         if(!directories.has(path)||typeof mode!=='number'||!Number.isInteger(mode)||mode<0||mode>0o7777)throw new Error('Invalid snapshot directory mode')
       }
+      const validTimes=(times:Record<string,{atimeMs:number;mtimeMs:number}>|undefined,paths:Set<string>,label:string)=>{
+        if(times===undefined)return
+        if(!times||typeof times!=='object'||Array.isArray(times)||Object.keys(times).length!==paths.size)
+          throw new Error(`Invalid snapshot ${label} times`)
+        for(const [path,value] of Object.entries(times)){
+          if(!paths.has(path)||!value||typeof value!=='object'||Array.isArray(value)||
+            !Number.isFinite(value.atimeMs)||!Number.isFinite(value.mtimeMs)||
+            Math.abs(value.atimeMs)>8.64e15||Math.abs(value.mtimeMs)>8.64e15)
+            throw new Error(`Invalid snapshot ${label} time`)
+        }
+      }
+      validTimes(snapshot.fileTimes,new Set(files.keys()),'file')
+      validTimes(snapshot.directoryTimes,directories,'directory')
     }
     for (const path of [...files.keys(),...symlinks.keys()]) {
       if(directories.has(path))throw new Error('ENOTDIR: file is also a directory')
@@ -255,7 +275,10 @@ export class WorkspaceFiles implements VirtualFileSystem {
     const previous=this.#files,previousDirectories=this.#directories,previousSymlinks=this.#symlinks,previousMetadata=this.#metadata
     for(const [path,node] of files){
       const before=previous.get(path)
-      if(before&&before.bytes.length===node.bytes.length&&!before.bytes.some((byte,index)=>byte!==node.bytes[index])&&before.metadata.permissions===node.metadata.permissions)node.metadata=before.metadata
+      if(before&&before.bytes.length===node.bytes.length&&!before.bytes.some((byte,index)=>byte!==node.bytes[index])&&
+        (before.metadata.permissions??0o644)===(node.metadata.permissions??0o644))node.metadata=before.metadata
+      const times=snapshot.version===5?snapshot.fileTimes?.[path]:undefined
+      if(times){node.metadata.atimeMs=times.atimeMs;node.metadata.mtimeMs=times.mtimeMs}
     }
     const metadata=new Map<string,Metadata>()
     for(const path of directories){
@@ -263,6 +286,8 @@ export class WorkspaceFiles implements VirtualFileSystem {
       const before=previousDirectories.has(path)?previousMetadata.get(path):undefined
       const next=before&&before.permissions===mode?before:this.#newMetadata()
       if(mode!==undefined)next.permissions=mode
+      const times=snapshot.version===5?snapshot.directoryTimes?.[path]:undefined
+      if(times){next.atimeMs=times.atimeMs;next.mtimeMs=times.mtimeMs}
       metadata.set(path,next)
     }
     for(const [path,target] of symlinks){
@@ -280,14 +305,21 @@ export class WorkspaceFiles implements VirtualFileSystem {
     for(const node of files.values())this.#nodeReferences.set(node,(this.#nodeReferences.get(node)??0)+1)
     this.#byteLength=size
     this.#revision++
-    for(const path of previous.keys())if(!files.has(path))this.#notify(path,'rename')
-    for(const path of previousDirectories)if(!directories.has(path))this.#notify(path,'rename')
-    for(const path of directories)if(!previousDirectories.has(path))this.#notify(path,'rename')
-    for(const path of new Set([...previousSymlinks.keys(),...symlinks.keys()]))if(previousSymlinks.get(path)!==symlinks.get(path))this.#notify(path,'rename')
+    const notifyRestore=(path:string,eventType:WorkspaceChange['eventType'])=>{
+      const fileTimes=snapshot.version===5?snapshot.fileTimes:undefined
+      const directoryTimes=snapshot.version===5?snapshot.directoryTimes:undefined
+      this.#notify(path,eventType,{self:Boolean(fileTimes?.[path]||directoryTimes?.[path]),
+        parent:Boolean(directoryTimes?.[this.#parent(path)])})
+    }
+    for(const path of previous.keys())if(!files.has(path))notifyRestore(path,'rename')
+    for(const path of previousDirectories)if(!directories.has(path))notifyRestore(path,'rename')
+    for(const path of directories)if(!previousDirectories.has(path))notifyRestore(path,'rename')
+    for(const path of new Set([...previousSymlinks.keys(),...symlinks.keys()]))if(previousSymlinks.get(path)!==symlinks.get(path))notifyRestore(path,'rename')
     for(const [path,node] of files){
       const bytes=node.bytes,before=previous.get(path)?.bytes
-      if(!before)this.#notify(path,'rename')
-      else if(before.length!==bytes.length||before.some((byte,index)=>byte!==bytes[index])||previous.get(path)!.metadata.permissions!==node.metadata.permissions)this.#notify(path,'change')
+      if(!before)notifyRestore(path,'rename')
+      else if(before.length!==bytes.length||before.some((byte,index)=>byte!==bytes[index])||
+        (previous.get(path)!.metadata.permissions??0o644)!==(node.metadata.permissions??0o644))notifyRestore(path,'change')
     }
   }
 
@@ -345,6 +377,8 @@ export class WorkspaceFiles implements VirtualFileSystem {
     if(this.byteLength+bytes>this.maxBytes)throw new Error('ENOSPC: workspace byte quota exceeded')
     this.#symlinks.set(path,target);this.#byteLength+=bytes;this.#metadata.set(path,this.#newMetadata());this.#revision++;this.#notify(path,'rename')
   }
+  async symlink(target:string,path:string){this.mkdirSync(this.#parent(path),true);this.symlinkSync(target,path)}
+  async chmod(path:string,mode:number){this.chmodSync(path,mode)}
   #parents(path:string){const parts=path.split('/'),result=['/'];for(let i=2;i<parts.length;i++)result.push(parts.slice(0,i).join('/'));return result}
   #parent(path:string){return path.slice(0,path.lastIndexOf('/'))||'/'}
   #checkParents(path:string){for(const parent of this.#parents(path))if(this.#files.has(parent))throw new Error('ENOTDIR: parent is a file')}

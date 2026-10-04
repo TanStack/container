@@ -1,5 +1,9 @@
 # Browser sandbox SDK
 
+This is the historical all-in-one QuickJS guide. The default API 8 build is
+native-only, use [the native package guide](NATIVE_PACKAGES.md). These older
+examples and compatibility records do not apply to the native package.
+
 Experimental alpha package. This is not a complete Node runtime or
 a production security boundary for arbitrary untrusted projects. Vite and
 TanStack Start claims are limited to the exact workflows marked passed in the
@@ -245,8 +249,10 @@ the browser's structured clone algorithm. `session.snapshot()` still defaults to
 the JSON-safe base64 shape for tools, JSON files and transport across a text-only
 boundary. `session.restore()` accepts both shapes, so existing base64 records keep
 working. Restore creates files and installed dependencies in a fresh runtime,
-then the owner must spawn the app again. Snapshots do not contain
-running processes, open ports, browser state or credentials.
+then the owner must spawn the app again. Snapshots do not contain running
+processes, open ports or host browser state. They include saved workspace files
+without filtering secrets, including credentials placed in `.env` or other files.
+Treat snapshot exports as sensitive whenever the workspace contains secrets.
 
 `AgentSession.close()` resolves only after the kernel and its owned compiler
 workers acknowledge shutdown. Await it before opening another project so large
@@ -342,6 +348,49 @@ separate from guest command timeouts because a bounded lockfile install can be
 slower on Safari or a constrained network. Hitting either deadline closes the
 kernel, so create or restore a new session before retrying. Use the optional
 `AbortSignal` for an earlier caller-controlled cancellation.
+
+## Native agent backend
+
+Use an already-started `NativeOwnerClient` to run the agent tools on the
+browser-native backend:
+
+```ts
+import { AgentSession, NativeAgentBackend } from '@tanstack/browser-sandbox-experimental'
+
+const session = new AgentSession({}, {
+  kernel: new NativeAgentBackend(client, '/app'),
+})
+
+await session.write({ path: '/app/note.txt', text: 'hello' })
+const result = await session.run({ command: 'node', args: ['app.js'] })
+const snapshot = await session.snapshot({ encoding: 'binary' })
+await session.restore({ snapshot })
+await session.close()
+```
+
+The backend owns the client. Closing the session cancels its commands,
+waits for pending operations, disposes the project, and closes the channel.
+The workspace root must match the root used when starting the owner project.
+`list()` defaults to that root. Snapshots must use version 5 for restore.
+
+Native installs ignore lifecycle scripts and reject `ignoreScripts: false`.
+Backend spawn options support `cwd` and command-local `env` values with
+POSIX variable names. Values are passed literally and do not change the
+environment of later commands. Process cancellation supports
+`SIGKILL` as a cancellation request, not an operating-system signal.
+Unread process output is bounded, overflow cancels with `ERR_OUTPUT_LIMIT`.
+For interactive input, call `session.kernel.spawn(command, args, { stdio: 'pipe' })`.
+The native process handle then exposes `writeInput(stringOrBytes)` and
+`endInput()`. Send EOF before waiting for commands that read until EOF,
+then dispose the handle. Input after EOF, exit or cancellation rejects.
+Each input chunk is limited to 64 KiB. Await each write before sending the
+next chunk. Native writes resolve when the input reader takes the chunk,
+not when the application finishes processing it. Concurrent writes reject.
+This is not a full PTY. Omit `stdio` for the ordinary
+one-shot command behavior.
+Resources with `scope: 'native-owner'` count owner transport objects, not
+guest-wide Node handles or browser heap usage. Native workers are not a
+security boundary for hostile code.
 
 ## Optional esbuild worker
 

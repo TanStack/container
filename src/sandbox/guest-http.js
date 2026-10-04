@@ -100,7 +100,7 @@ class Parser {
 export class OutgoingMessage extends Writable {
   constructor(){super({autoDestroy:false});this._headers=new Map();this.headersSent=false;this._trailers='';this._bytes=0;this.strictContentLength=false;this._removed=new Set()}
   get connection(){return this.socket}
-  get finished(){return this.writableEnded}
+  get finished(){return Boolean(this._writableState.ended)}
   setHeader(name,value){if(this.headersSent)throw error('ERR_HTTP_HEADERS_SENT');validateHeaderName(name);for(const item of Array.isArray(value)?value:[value])validateHeaderValue(name,item);this._headers.set(name.toLowerCase(),{name,value});this._removed.delete(name.toLowerCase());return this}
   setHeaders(values){for(const [name,value] of values)this.setHeader(name,value);return this}
   appendHeader(name,value){const old=this.getHeader(name);return this.setHeader(name,old===undefined?value:[...Array.isArray(old)?old:[old],...Array.isArray(value)?value:[value]])}
@@ -181,7 +181,9 @@ export class Server extends NetServer {
     armDeadlines()
     socket.on('timeout',()=>{if(!this.emit('timeout',socket))socket.destroy()})
     socket.on('error',cause=>{if(req&&!req.complete){req.on('error',()=>{});req.destroy(cause)}})
-    socket.on('end',()=>{if(!upgraded&&(!res||responseDone))socket.end()})
+    // HTTP does not keep an unfinished response alive after its client leaves.
+    // Upgraded sockets own their own half-close behavior.
+    socket.on('end',()=>{if(!upgraded){if(res&&!responseDone)socket.destroy();else socket.end()}})
     socket.once('close',()=>{clearDeadlines();parser.detach();this._sockets.delete(socket);if(req&&!req.complete){req.on('error',()=>{});req.destroy(error('ECONNRESET'))}if(res&&!responseDone)res.destroy()})
   }
   setTimeout(ms,callback){this.timeout=duration(ms);if(callback)this.on('timeout',callback);return this}

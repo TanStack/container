@@ -25,7 +25,8 @@ export class WorkerWebSocket {
   static async connect(kernel:Pick<WorkerKernel,'connect'>,port:number,allowedOrigin:string,address:string,protocols:string[]=[]){
     const origin=new URL(allowedOrigin),url=new URL(address)
     const previewAddress=url.host===origin.host&&url.protocol===(origin.protocol==='https:'?'wss:':'ws:')
-    const guestLoopback=['localhost','127.0.0.1','[::1]'].includes(url.hostname)&&url.protocol==='ws:'
+    const guestLoopback=(['localhost','127.0.0.1','[::1]'].includes(url.hostname)||
+      url.hostname===origin.hostname&&url.hostname.endsWith('.localhost'))&&url.protocol==='ws:'
     if(!['http:','https:'].includes(origin.protocol)||(!previewAddress&&!guestLoopback)||url.username||url.password||url.hash)throw new Error('WebSocket outside preview origin')
     if(protocols.length>16||new Set(protocols).size!==protocols.length||protocols.some(value=>!token.test(value)||value.length>256))throw new Error('Invalid WebSocket protocols')
     const key=btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))))

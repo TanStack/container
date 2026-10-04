@@ -35,7 +35,8 @@ const headers =
       }
     : {}
 
-export default defineConfig({
+export default defineConfig(({mode})=>({
+  resolve:mode==='test'?undefined:{alias:{'node:buffer':'buffer/','node:path':'path-browserify','node:events':'events/','node:stream':'stream-browserify'}},
   plugins: testOptimization || testSyncOptimization || testCooperative ? [{
     name: 'test-wasm-engine-variant',
     configureServer(server) {
@@ -62,6 +63,8 @@ export default defineConfig({
     // The optional VM is loaded inside a worker, beyond the HTML dependency scan.
     include: [
       'quickjs-emscripten-core',
+      'memfs',
+      'buffer',
       'cjs-module-lexer',
       'whatwg-url',
       'esbuild-wasm',
@@ -89,4 +92,4 @@ export default defineConfig({
   preview: {
     headers,
   },
-})
+}))

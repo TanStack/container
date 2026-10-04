@@ -5523,7 +5523,13 @@ var require_buffer = __commonJS({
       return blitBuffer(base64ToBytes(string), buf, offset, length);
     }
     function ucs2Write(buf, string, offset, length) {
-      return blitBuffer(utf16leToBytes(string, buf.length - offset), buf, offset, length);
+      const units = Math.min(string.length, Math.floor(Math.min(length, buf.length - offset) / 2));
+      for (let i = 0; i < units; i++) {
+        const code = string.charCodeAt(i);
+        buf[offset + i * 2] = code & 255;
+        buf[offset + i * 2 + 1] = code >>> 8;
+      }
+      return units * 2;
     }
     Buffer3.prototype.write = function write(string, offset, length, encoding) {
       if (offset === void 0) {
@@ -6349,19 +6355,6 @@ var require_buffer = __commonJS({
       const byteArray = [];
       for (let i = 0; i < str.length; ++i) {
         byteArray.push(str.charCodeAt(i) & 255);
-      }
-      return byteArray;
-    }
-    function utf16leToBytes(str, units) {
-      let c, hi, lo;
-      const byteArray = [];
-      for (let i = 0; i < str.length; ++i) {
-        if ((units -= 2) < 0) break;
-        c = str.charCodeAt(i);
-        hi = c >> 8;
-        lo = c % 256;
-        byteArray.push(lo);
-        byteArray.push(hi);
       }
       return byteArray;
     }

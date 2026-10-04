@@ -11,9 +11,11 @@ const failure=(code:string,message=code)=>Object.assign(Error(message),{code})
 export class VirtualNetwork {
   #handles=new Map<number,Listener|Socket>()
   #ports=new Map<number,ListenerGroup>()
+  #reservedPorts=new Set<number>()
   #portListeners=new Set<(event:PortEvent)=>void>()
   #next=1
   #ephemeral=49152
+  #listenPortAllocator:((requested:number)=>number)|undefined
   readonly maxBufferedBytes=64*1024
   get size(){return this.#handles.size}
   get listening(){return this.#ports.size}
@@ -36,6 +38,20 @@ export class VirtualNetwork {
     for(const port of this.listeningPorts)if(this.#portListeners.has(subscription)&&this.#ports.has(port))this.#notifyPort(subscription,{type:'open',port})
     return ()=>{this.#portListeners.delete(subscription)}
   }
+  setListenPortAllocator(allocate:((requested:number)=>number)|undefined){this.#listenPortAllocator=allocate}
+  reserveListenerPort(requested=0){
+    this.#validatePort(requested)
+    if(this.#ports.size+this.#reservedPorts.size>=32)throw failure('EMFILE','Virtual socket limit exceeded')
+    const port=this.#listenPortAllocator?this.#listenPortAllocator(requested):requested||this.#allocatePort()
+    if(this.#ports.has(port)||this.#reservedPorts.has(port))throw failure('EADDRINUSE')
+    this.#reservedPorts.add(port)
+    return port
+  }
+  releaseReservedPort(port:number){this.#reservedPorts.delete(port)}
+  listenReserved(owner:number,port:number){
+    if(!this.#reservedPorts.delete(port))throw failure('EINVAL','Port reservation is unavailable')
+    return this.#listen(owner,port,'127.0.0.1',undefined,false)
+  }
   #notifyPort(listener:(event:PortEvent)=>void,event:PortEvent){
     try{listener(Object.freeze({...event}))}catch{/* Observers must not affect network operations. */}
   }
@@ -49,7 +65,7 @@ export class VirtualNetwork {
   }
   #socket(owner:number,id:number){const handle=this.#get(owner,id);if(handle.kind!=='socket')throw failure('EINVAL');return handle}
   #allocatePort(){
-    for(let i=0;i<16384;i++){const port=this.#ephemeral++;if(this.#ephemeral>65535)this.#ephemeral=49152;if(!this.#ports.has(port))return port}
+    for(let i=0;i<16384;i++){const port=this.#ephemeral++;if(this.#ephemeral>65535)this.#ephemeral=49152;if(!this.#ports.has(port)&&!this.#reservedPorts.has(port))return port}
     throw failure('EADDRINUSE')
   }
   #validatePort(port:number){if(!Number.isInteger(port)||port<0||port>65535)throw failure('ERR_SOCKET_BAD_PORT')}
@@ -58,8 +74,14 @@ export class VirtualNetwork {
     if(handle.pending){const resolve=handle.pending;handle.pending=undefined;resolve(event)}else handle.events.push(event)
   }
   listen(owner:number,port=0,host='127.0.0.1',shareKey?:string){
+    return this.#listen(owner,port,host,shareKey,true)
+  }
+  #listen(owner:number,port:number,host:string,shareKey:string|undefined,allocate:boolean){
     this.#validatePort(port);this.#host(host)
-    if(port===0)port=this.#allocatePort()
+    if(allocate&&this.#listenPortAllocator)port=this.#listenPortAllocator(port)
+    else if(port===0)port=this.#allocatePort()
+    this.#validatePort(port)
+    if(this.#reservedPorts.has(port))throw failure('EADDRINUSE')
     const group=this.#ports.get(port)
     if((!group&&this.#ports.size>=32)||this.#handles.size>=256)throw failure('EMFILE','Virtual socket limit exceeded')
     if(group&&(!shareKey||group.shareKey!==shareKey||group.listeners.some(listener=>listener.owner===owner)))throw failure('EADDRINUSE')
@@ -124,12 +146,12 @@ export class VirtualNetwork {
     const peer=this.#handles.get(socket.peer)
     if(peer?.kind==='socket')this.#emit(peer,{type:'end'})
   }
-  destroy(owner:number,id:number){
+  destroy(owner:number,id:number,reset=false){
     const socket=this.#socket(owner,id)
     this.#handles.delete(id);socket.pending?.(null);socket.write?.reject(failure('ECANCELED'))
     const peer=this.#handles.get(socket.peer)
     if(peer?.kind==='socket'){
-      if(!socket.ended)this.#emit(peer,{type:'error',code:'ECONNRESET'})
+      if(!socket.ended)this.#emit(peer,reset?{type:'error',code:'ECONNRESET'}:{type:'end'})
       this.#flushWrite(peer)
     }
     const server=this.#handles.get(socket.server)
@@ -158,7 +180,7 @@ export class VirtualNetwork {
   hasReferences(owner:number){return [...this.#handles.values()].some(handle=>handle.owner===owner&&handle.ref)}
   release(owner:number){
     for(const handle of [...this.#handles.values()])if(handle.owner===owner){
-      if(handle.kind==='socket'){if(this.#handles.has(handle.id))this.destroy(owner,handle.id)}
+      if(handle.kind==='socket'){if(this.#handles.has(handle.id))this.destroy(owner,handle.id,true)}
       else {this.#removeListener(handle);handle.pending?.(null);this.#handles.delete(handle.id)}
     }
   }
@@ -169,7 +191,7 @@ export function networkCall(network:VirtualNetwork,owner:number,method:string,ar
     case 'listen':return network.listen(owner,args[0],args[1],args[2])
     case 'connect':return network.connect(owner,args[0],args[1])
     case 'end':return network.end(owner,args[0])
-    case 'destroy':return network.destroy(owner,args[0])
+    case 'destroy':return network.destroy(owner,args[0],args[1]??false)
     case 'closeServer':return network.closeServer(owner,args[0])
     case 'connections':return network.connections(owner,args[0])
     case 'ref':return network.ref(owner,args[0],args[1])

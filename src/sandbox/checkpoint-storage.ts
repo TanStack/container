@@ -23,6 +23,8 @@ interface StoredCheckpoint extends CheckpointMetadata {
   symlinkEntries:Record<string,string>
   fileModes?:Record<string,number>
   directoryModes?:Record<string,number>
+  fileTimes?:Record<string,{atimeMs:number;mtimeMs:number}>
+  directoryTimes?:Record<string,{atimeMs:number;mtimeMs:number}>
 }
 
 function checkpointKey(key:string){
@@ -113,6 +115,8 @@ export async function saveKernelCheckpoint(key:string,snapshot:WorkspaceSnapshot
       entries:prepared.entries,directoryEntries:prepared.directoryEntries,symlinkEntries:prepared.symlinkEntries,
       ...('fileModes' in snapshot?{fileModes:{...snapshot.fileModes}}:{}),
       ...('directoryModes' in snapshot?{directoryModes:{...snapshot.directoryModes}}:{}),
+      ...('fileTimes' in snapshot&&snapshot.fileTimes?{fileTimes:{...snapshot.fileTimes}}:{}),
+      ...('directoryTimes' in snapshot&&snapshot.directoryTimes?{directoryTimes:{...snapshot.directoryTimes}}:{}),
     }
     for(const [hash,value] of prepared.blobs)blobs.put(value,hash)
     manifests.put(manifest,key)
@@ -154,7 +158,9 @@ export async function restoreKernelCheckpoint(key:string):Promise<{snapshot:Work
       :manifest.snapshotVersion===2?{version:2,...common}
       :manifest.snapshotVersion===3?{version:3,...common,symlinks:{...manifest.symlinkEntries}}
       :manifest.snapshotVersion===4?{version:4,...common,symlinks:{...manifest.symlinkEntries},fileModes:{...manifest.fileModes!}}
-      :manifest.snapshotVersion===5?{version:5,...common,symlinks:{...manifest.symlinkEntries},fileModes:{...manifest.fileModes!},directoryModes:{...manifest.directoryModes!}}
+      :manifest.snapshotVersion===5?{version:5,...common,symlinks:{...manifest.symlinkEntries},fileModes:{...manifest.fileModes!},directoryModes:{...manifest.directoryModes!},
+        ...(manifest.fileTimes?{fileTimes:{...manifest.fileTimes}}:{}),
+        ...(manifest.directoryTimes?{directoryTimes:{...manifest.directoryTimes}}:{})}
       :(()=>{throw Error(`Unsupported snapshot version: ${manifest.snapshotVersion}`)})()
     return {snapshot,metadata:publicMetadata(manifest)}
   }finally{db.close()}

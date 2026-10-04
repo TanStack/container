@@ -54,7 +54,8 @@ export function buildSDKAPIContract(directory,declarations,{requireCompatibility
     return {name:symbol.getName(),flags:target.flags,declarations,...inheritedAPI(target)}
   }).sort((a,b)=>a.name.localeCompare(b.name))
   }
-  const entrypoints={'.':{types:declarations.entry,exports:inspect(declarations.entry)},'./assets':{types:declarations.assetsEntry,exports:inspect(declarations.assetsEntry)}}
+  const entrypoints={'.':{types:declarations.entry,exports:inspect(declarations.entry)},'./assets':{types:declarations.assetsEntry,exports:inspect(declarations.assetsEntry)},
+    ...(declarations.nativeEntry?{'./native':{types:declarations.nativeEntry,exports:inspect(declarations.nativeEntry)}}:{})}
   const entrySource=program.getSourceFile(resolve(root,declarations.entry)),entryModule=checker.getSymbolAtLocation(entrySource)
   const compatibilityExport=checker.getExportsOfModule(entryModule).find(symbol=>symbol.getName()==='SDK_COMPATIBILITY')
   if(requireCompatibility&&!compatibilityExport)throw Error('SDK API entry must export SDK_COMPATIBILITY')

@@ -1,0 +1,16 @@
+const bootstrapProgress=(phase:string)=>self.postMessage({type:'native-dev-progress',phase,elapsedMs:performance.now()})
+bootstrapProgress('bootstrap-entered')
+await bootstrapNativeFilesystem()
+bootstrapProgress('filesystem-connected')
+const {initializeBrowserEsbuild}=await import('./browser-esbuild')
+await initializeBrowserEsbuild()
+bootstrapProgress('esbuild-ready')
+const {installNodeTimerHandles}=await import('../vite-browser/node-timers')
+installNodeTimerHandles()
+bootstrapProgress('timer-handles-installed')
+const {installNativeAsyncContext}=await import('./async-context')
+installNativeAsyncContext()
+bootstrapProgress('async-context-installed')
+await import('./dev-server.worker')
+export {}
+import {bootstrapNativeFilesystem} from './filesystem-bootstrap'

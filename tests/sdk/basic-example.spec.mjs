@@ -16,10 +16,26 @@ test.beforeAll(async()=>{
   const packed=JSON.parse(execFileSync('npm',['pack',sdk,'--json','--ignore-scripts','--pack-destination',directory],{encoding:'utf8',env,timeout:30000}))
   expect(packed).toHaveLength(1)
   const tarball=join(directory,packed[0].filename)
-  execFileSync('npm',['install','--offline','--ignore-scripts','--no-audit','--no-fund',tarball],{cwd:join(directory,'example'),env,timeout:30000})
+  const runtimeRoot=process.env.SDK_RUNTIME_OUTPUT&&resolve(process.env.SDK_RUNTIME_OUTPUT)
+  let runtimeTarball
+  if(runtimeRoot){
+    const packedRuntime=JSON.parse(execFileSync('npm',['pack',runtimeRoot,'--json','--ignore-scripts','--pack-destination',directory],{encoding:'utf8',env,timeout:30000}))
+    expect(packedRuntime).toHaveLength(1)
+    runtimeTarball=join(directory,packedRuntime[0].filename)
+  }
+  execFileSync('npm',['install',...(runtimeRoot?[]:['--offline']),'--ignore-scripts','--no-audit','--no-fund',tarball,...(runtimeTarball?[runtimeTarball]:[])],{cwd:join(directory,'example'),env,timeout:30000})
   const {startExample}=await import(pathToFileURL(join(directory,'example/server.mjs')).href)
   host=await startExample({ownerPort:0,previewPort:0})
-  evidence={sdk,directory,tarballSHA256:createHash('sha256').update(readFileSync(tarball)).digest('hex'),manifestSHA256:createHash('sha256').update(readFileSync(join(sdk,'manifest.json'))).digest('hex')}
+  const manifestBytes=readFileSync(join(sdk,runtimeRoot?'package-assets.json':'manifest.json'))
+  evidence={sdk,directory,tarballSHA256:createHash('sha256').update(readFileSync(tarball)).digest('hex'),manifestSHA256:createHash('sha256').update(manifestBytes).digest('hex')}
+  if(runtimeRoot){
+    expect(host.preparedAssets?.manifestPath).toBeTruthy()
+    evidence.packaging='split'
+    evidence.runtimeTarballSHA256=createHash('sha256').update(readFileSync(runtimeTarball)).digest('hex')
+    evidence.runtimeManifestSHA256=createHash('sha256').update(readFileSync(join(runtimeRoot,'package-assets.json'))).digest('hex')
+    evidence.deploymentManifestSHA256=createHash('sha256').update(readFileSync(host.preparedAssets.manifestPath)).digest('hex')
+    evidence.buildProfile=JSON.parse(readFileSync(join(runtimeRoot,'runtime-profile.json'),'utf8')).buildProfile
+  }
 })
 test.afterAll(async()=>{await host?.close()})
 

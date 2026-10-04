@@ -18,7 +18,34 @@ export function sdkInputRecorder(){
   const inputs=new Set()
   return {inputs,plugin:{name:'sdk-input-recorder',moduleParsed(module){if(!module.id.startsWith('\0'))inputs.add(module.id.split('?')[0])}}}
 }
-export function writeSDKNotices(out,projectRoot,inputIds,engines,parserRoot,projectLicense){
+/** Notices for the native API, its shell bridge and the copied native catalog. */
+export function writeNativeSDKNotices(out,projectRoot,inputIds,projectLicense,nativeRuntime){
+  const packages=new Map(),workspace=new Set()
+  for(const id of [...inputIds].sort()){
+    const directory=packageDirectory(id)
+    if(directory)addPackageNotices(packages,directory,JSON.parse(readFileSync(join(directory,'package.json'),'utf8')))
+    else {const path=relative(projectRoot,id).split(sep).join('/');if(path&&!path.startsWith('../'))workspace.add(path)}
+  }
+  const directory=join(out,'licenses');mkdirSync(directory)
+  const ordered=[...packages.values()].sort((a,b)=>(a.name+'@'+a.version).localeCompare(b.name+'@'+b.version))
+  const text=ordered.map(item=>`${item.name}@${item.version}\nDeclared license: ${item.license??'not declared'}\n${item.notices||'No license or notice text was present in this installed package. Distribution review remains open.'}`).join('\n\n')
+  writeFileSync(join(directory,'THIRD-PARTY-NOTICES.txt'),text)
+  const inputs={format:1,scope:'Locally proven native build inputs and shipped notices, not legal clearance',
+    ...(projectLicense?{projectLicense:{path:'LICENSE',spdx:projectLicense.spdx,sha256:hash(readFileSync(projectLicense.path))}}:{}),
+    generatedBundles:{artifacts:['index.js','native-chunks/','runtime/workers/'],workspace:[...workspace].sort(),packages:[...packages.keys()].sort(),notice:'licenses/THIRD-PARTY-NOTICES.txt'},
+    native:[...(nativeRuntime.runtimes??[nativeRuntime]).map(item=>{
+      const prefix=item.entry.slice(0,-'engine.js'.length)
+      return {artifacts:[prefix],source:'Pinned browser-native worker and toolchain assets',notice:prefix+'THIRD-PARTY-NOTICES.txt',
+        evidence:prefix+'SHIPPED-INPUTS.json',distributionReviewComplete:item.distributionReviewComplete}
+    }),{artifacts:['runtime/mvdan-shell/'],source:'mvdan.cc/sh/v3 plus Go WebAssembly runtime',notices:['runtime/mvdan-shell/MVDAN-LICENSE','runtime/mvdan-shell/GO-LICENSE']}],
+    localArtifacts:[...(projectLicense?['LICENSE']:[]),'README.md','COMPATIBILITY.md','api-contract.json','compatibility-policy.json',
+      'candidate-compatibility.json','release-record.json','assets.mjs','native-owner-host-assets.mjs','package.json','preview-host/',
+      'sdk-api-compare.mjs','check-sdk-release.mjs','sdk-build-profiles.mjs','sdk-license-policy.mjs','verify-sdk.mjs',
+      'native-sdk-boundary.mjs','native-runtime-paths.mjs','native-entry-graph.json','size-report.json','types/','licenses/']}
+  const json=JSON.stringify(inputs,null,2)+'\n';writeFileSync(join(directory,'SHIPPED-INPUTS.json'),json)
+  return {path:'licenses/SHIPPED-INPUTS.json',sha256:hash(json),packageCount:packages.size}
+}
+export function writeSDKNotices(out,projectRoot,inputIds,engines,parserRoot,projectLicense,nativeRuntime){
   const packages=new Map(),workspace=new Set()
   for(const id of [...inputIds].sort()){
     const directory=packageDirectory(id)
@@ -47,7 +74,11 @@ export function writeSDKNotices(out,projectRoot,inputIds,engines,parserRoot,proj
     writeFileSync(join(directory,'ROLLDOWN-THIRD-PARTY-LICENSE'),readFileSync(join(parserRoot,'node_modules/rolldown/THIRD-PARTY-LICENSE')))
   }
   writeFileSync(join(directory,'THIRD-PARTY-NOTICES.txt'),text)
-  const inputs={format:1,scope:'Locally proven build inputs and shipped notices, not legal clearance',...(projectLicense?{projectLicense:{path:'LICENSE',spdx:projectLicense.spdx,sha256:hash(readFileSync(projectLicense.path))}}:{}),generatedBundles:{artifacts:['index.js','kernel-host.js','runtime/workers/'],workspace:[...workspace].sort(),packages:[...packages.keys()].sort(),notice:'licenses/THIRD-PARTY-NOTICES.txt'},native:[
+  const inputs={format:1,scope:'Locally proven build inputs and shipped notices, not legal clearance',...(projectLicense?{projectLicense:{path:'LICENSE',spdx:projectLicense.spdx,sha256:hash(readFileSync(projectLicense.path))}}:{}),generatedBundles:{artifacts:['index.js','native.js','native-chunks/','kernel-host.js','sdk-chunks/','runtime/workers/'],workspace:[...workspace].sort(),packages:[...packages.keys()].sort(),notice:'licenses/THIRD-PARTY-NOTICES.txt'},native:[
+    ...(nativeRuntime?(nativeRuntime.runtimes??[nativeRuntime]).map(item=>{
+      const prefix=item.entry.slice(0,-'engine.js'.length)
+      return {artifacts:[prefix],source:'Pinned browser-native Vite worker and copied toolchain assets',notice:prefix+'THIRD-PARTY-NOTICES.txt',evidence:prefix+'SHIPPED-INPUTS.json',distributionReviewComplete:item.distributionReviewComplete}
+    }):[]),
     ...(parserRoot?[{artifacts:['runtime/rolldown-parser/'],source:'Pinned Rolldown native parser and WASI runtime',notices:['licenses/ROLLDOWN-LICENSE','licenses/ROLLDOWN-THIRD-PARTY-LICENSE','licenses/THIRD-PARTY-NOTICES.txt',...rolldownRust.notices,...rustWASI.notices.map(item=>item.path)],evidence:rolldownRust.path,sysrootEvidence:rustWASI.path}]:[]),
     {artifacts:['runtime/compiler/esbuild.wasm'],source:'npm:esbuild-wasm',notice:'licenses/THIRD-PARTY-NOTICES.txt'},
     {artifacts:['runtime/compiler/artifact.json','runtime/compiler/GO-LICENSE','runtime/workers/browser-compiler.js'],source:'Pinned esbuild Go WebAssembly runtime and workspace compiler adapter',notices:['runtime/compiler/GO-LICENSE','licenses/THIRD-PARTY-NOTICES.txt']},
@@ -59,7 +90,7 @@ export function writeSDKNotices(out,projectRoot,inputIds,engines,parserRoot,proj
     {artifacts:['runtime/http2-runtime/'],source:'nghttp2',notice:'runtime/http2-runtime/LICENSE'},
     {artifacts:['runtime/kernel-runtime/'],source:'generated Node compatibility bundle with runtime/kernel-runtime/SHIPPED-INPUTS.json provenance',notices:['runtime/kernel-runtime/THIRD-PARTY-NOTICES.txt','runtime/kernel-runtime/ZLIB-NOTICES.txt']},
     {artifacts:['runtime/vm-web-apis/'],source:'generated Web API compatibility bundle',notice:'runtime/vm-web-apis/THIRD-PARTY-NOTICES.txt'},
-  ],localArtifacts:[...(projectLicense?['LICENSE']:[]),'README.md','COMPATIBILITY.md','examples/basic/','examples/frameworks/','api-contract.json','compatibility-policy.json','candidate-compatibility.json','release-record.json','assets.mjs','kernel-host.html','package.json','preview-host/','sdk-api-compare.mjs','check-sdk-release.mjs','sdk-build-profiles.mjs','sdk-license-policy.mjs','verify-sdk.mjs','size-report.json','index.d.ts','assets.d.ts','types/','licenses/']}
+  ],localArtifacts:[...(projectLicense?['LICENSE']:[]),'README.md','native-entry-graph.json','COMPATIBILITY.md','examples/basic/','examples/frameworks/','api-contract.json','compatibility-policy.json','candidate-compatibility.json','release-record.json','assets.mjs','native-owner-host-assets.mjs','kernel-host.html','package.json','preview-host/','sdk-api-compare.mjs','check-sdk-release.mjs','native-sdk-boundary.mjs','sdk-build-profiles.mjs','sdk-license-policy.mjs','verify-sdk.mjs','size-report.json','index.d.ts','assets.d.ts','types/','licenses/']}
   if(parserRoot)inputs.distributionReview={complete:false,packageEvidence:{path:'licenses/ROLLDOWN-PACKAGE-EVIDENCE.json',sha256:hash(readFileSync(join(directory,'ROLLDOWN-PACKAGE-EVIDENCE.json')))},rustEvidence:{path:rolldownRust.path,sha256:rolldownRust.sha256,exactLinkedContents:false,coveredMissingNoticeRecords:rolldownRust.evidence.coveredMissingNoticeRecords.length,unresolvedMissingNoticeRecords:rolldownRust.evidence.unresolvedMissingNoticeRecords},rustSysrootEvidence:{path:rustWASI.path,sha256:rustWASI.sha256,exactLinkedContents:false,rustVersion:rustWASI.evidence.rust.version,target:rustWASI.evidence.rust.standardLibraryArchive.target,wasiSDK:rustWASI.evidence.rust.builder.wasiSDKVersion},missingPackageNoticeText:[...packages.values()].filter(item=>!item.notices).map(item=>item.name+'@'+item.version).sort(),unverified:['Four overinclusive Cargo inventory records still lack source notice text: '+rolldownRust.evidence.unresolvedMissingNoticeRecords.join(', ')+'.','Cargo metadata includes workspace-unified features and build dependencies, so the inventory is not proof of the exact Rust code linked into the distributed WASM artifact. Parent Rolldown and supplemental upstream notices are shipped as evidence, not assumed complete legal clearance.','Rust 1.98.1 and WASI SDK 33 notices are bound to the shipped Rolldown WASM hash, but are not proof of the exact sysroot objects linked into that binary.']}
   const json=JSON.stringify(inputs,null,2)+'\n';writeFileSync(join(directory,'SHIPPED-INPUTS.json'),json)
   return {path:'licenses/SHIPPED-INPUTS.json',sha256:hash(json),packageCount:packages.size}

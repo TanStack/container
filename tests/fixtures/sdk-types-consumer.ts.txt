@@ -3,7 +3,7 @@ import type {AgentWorkspaceSnapshot,AgentWorkspaceBinarySnapshot,AgentSnapshotOp
 
 const options:KernelOwnerOptions={cooperative:true,assetBaseURL:new URL('./runtime/',import.meta.url).href,workspace:{maxFiles:100}}
 const kernel=new WorkerKernel({'/main.js':'console.log(42)'},options)
-const apiVersion:6=SDK_COMPATIBILITY.apiVersion
+const apiVersion:8=SDK_COMPATIBILITY.apiVersion
 const stability:'experimental'=SDK_COMPATIBILITY.stability
 const listeningPorts:number[]=kernel.listeningPorts
 const unsubscribePorts:()=>void=kernel.subscribePorts((event:PortEvent)=>{

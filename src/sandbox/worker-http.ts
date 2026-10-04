@@ -1,10 +1,11 @@
 import type {WorkerKernel} from './kernel'
 import {abortableWait} from './abortable-wait'
 import {previewRequestTimeout} from './request-timeouts'
+import {acquireHTTPCapacity} from './http-capacity'
+import {StreamResponse} from './stream-response'
 
 type Socket = Awaited<ReturnType<WorkerKernel['connect']>>
 const token = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
-const encoder = new TextEncoder()
 
 // One request per connection. No external network access or connection pooling.
 export class WorkerHTTP {
@@ -32,13 +33,18 @@ export class WorkerHTTP {
       const reader = request.body.getReader()
       try {
         for (;;) {
-          const next = await reader.read()
+          const next = await abortableWait(reader.read(),request.signal)
           if (next.done) break
           size += next.value.length
           if (size > 16 * 1024 * 1024) throw new Error('HTTP request body exceeds 16 MiB')
           chunks.push(next.value)
         }
-      } catch (error) { await reader.cancel(error); throw error }
+      } catch (error) {
+        // Cancellation closes pending reads immediately. An underlying source's
+        // cleanup promise must not hold up the caller's original failure.
+        void reader.cancel(error).catch(()=>{})
+        throw error
+      }
       finally { reader.releaseLock() }
       headers.set('content-length', String(size))
     } else {
@@ -51,42 +57,77 @@ export class WorkerHTTP {
       if(size){chunks.push(new Uint8Array(body));headers.set('content-length',String(size))}
     }
     const head = `${request.method} ${url.pathname}${url.search} HTTP/1.1\r\n${[...headers].map(([name,value])=>`${name}: ${value}\r\n`).join('')}\r\n`
-    const bytes = encoder.encode(head)
+    // Request header values are ByteStrings, not UTF-8 text.
+    const bytes = Uint8Array.from(head,character=>character.charCodeAt(0))
     if (bytes.length > 16384) throw new Error('HTTP request headers exceed 16 KiB')
     request.signal.throwIfAborted()
-    const socket = await this.kernel.connect(this.port)
+    const release=await acquireHTTPCapacity(this.kernel,request.signal)
+    let socket:Socket
+    let connecting:Promise<Socket>|undefined
+    try{
+      request.signal.throwIfAborted()
+      connecting=this.kernel.connect(this.port)
+      socket=await abortableWait(connecting,request.signal)
+    }catch(error){
+      release()
+      // Socket creation may not itself support cancellation. A late success
+      // still belongs to this request and must not leave an unused socket open.
+      if(connecting)void connecting.then(socket=>socket.close()).catch(()=>{})
+      throw error
+    }
     let closed = false
     const close = async () => {
       if (closed) return
       closed = true
       clearTimeout(timer)
       request.signal.removeEventListener('abort', abort)
-      await socket.close()
+      try{await socket.close()}finally{release()}
     }
     let failure: unknown
-    const abort = () => { failure = request.signal.reason; void close().catch(()=>{}) }
-    const timer = setTimeout(() => { failure = new Error('HTTP response timed out'); void close().catch(()=>{}) }, this.requestTimeoutMs)
+    let phase='request headers',writtenBytes=0,receivedBytes=0
+    const writeWait=new AbortController()
+    const abort = () => { failure = request.signal.reason; writeWait.abort(failure);void close().catch(()=>{}) }
+    const timer = setTimeout(() => {
+      failure=Object.assign(new Error('HTTP response timed out'),{diagnostic:{phase,writtenBytes,receivedBytes,timeoutMs:this.requestTimeoutMs}})
+      writeWait.abort(failure)
+      void close().catch(()=>{})
+    }, this.requestTimeoutMs)
     request.signal.addEventListener('abort', abort, {once:true})
     if (request.signal.aborted) abort()
     try {
-      await socket.write(bytes)
+      writeWait.signal.throwIfAborted()
+      await abortableWait(socket.write(bytes),writeWait.signal)
+      writtenBytes+=bytes.length;phase='request body'
       for (const chunk of chunks)
-        for (let offset=0;offset<chunk.length;offset+=65536) await socket.write(chunk.slice(offset,offset+65536))
-      return await readHTTPResponse(socket, request.method, close, () => { if (failure) throw failure })
-    } catch (error) { await close(); throw error }
+        for (let offset=0;offset<chunk.length;offset+=65536){
+          const part=chunk.slice(offset,offset+65536)
+          writeWait.signal.throwIfAborted()
+          await abortableWait(socket.write(part),writeWait.signal);writtenBytes+=part.length
+        }
+      phase='response headers'
+      const finish=async()=>{
+        if(closed)return
+        try{await abortableWait(socket.end(),writeWait.signal)}finally{await close()}
+      }
+      const response=await readHTTPResponse(socket, request.method, close, () => { if (failure) throw failure },finish,count=>{receivedBytes+=count},writeWait.signal)
+      phase='response body'
+      return response
+    } catch (error) { void close().catch(()=>{}); throw error }
   }
 }
 
 /** Parses the guest's untrusted wire bytes without buffering the response body. */
-export async function readHTTPResponse(socket: Socket, method: string, close: () => Promise<void>, check = () => {}): Promise<Response> {
+export async function readHTTPResponse(socket: Socket, method: string, close: () => Promise<void>, check = () => {}, finish=close,onBytes:(count:number)=>void=()=>{},signal?:AbortSignal): Promise<Response> {
   let buffer = new Uint8Array(0), ended = false
   const more = async () => {
     check()
-    const event = await socket.read()
+    const pending=socket.read()
+    const event = signal?await abortableWait(pending,signal):await pending
     check()
     if (event?.type === 'error') throw new Error(`HTTP socket: ${event.code}`)
     if (!event || event.type === 'end' || event.type === 'close') { ended = true; return }
     if (event.type !== 'data') throw new Error('Unexpected HTTP socket event')
+    onBytes(event.bytes.length)
     const combined = new Uint8Array(buffer.length + event.bytes.length)
     combined.set(buffer); combined.set(event.bytes, buffer.length); buffer = combined
   }
@@ -114,16 +155,16 @@ export async function readHTTPResponse(socket: Socket, method: string, close: ()
       if (!text) return headers
       const colon = text.indexOf(':')
       if (colon < 1 || !token.test(text.slice(0,colon))) throw new Error('Invalid HTTP header')
-      const value = text.slice(colon+1).trim()
+      const value = text.slice(colon+1).replace(/^[\t ]+|[\t ]+$/g,'')
       if (/[^\t\x20-\x7e\x80-\xff]/.test(value)) throw new Error('Invalid HTTP header value')
       headers.append(text.slice(0,colon), value)
     }
   }
-  let status = 0, headers: Headers
+  let status = 0, statusText='', headers: Headers
   do {
-    const match = /^HTTP\/1\.[01] ([0-9]{3})(?: [\x20-\x7e\x80-\xff]*)?$/.exec(await line())
+    const match = /^HTTP\/1\.[01] ([0-9]{3})(?: ([\t\x20-\x7e\x80-\xff]*))?$/.exec(await line())
     if (!match) throw new Error('Invalid HTTP status')
-    status = Number(match[1]); headers = await fields()
+    status = Number(match[1]); statusText=match[2]??''; headers = await fields()
     if (status === 101) throw new Error('HTTP upgrade requires a WebSocket transport')
   } while (status >= 100 && status < 200)
   if (status < 200 || status > 599) throw new Error('Invalid HTTP status')
@@ -134,8 +175,8 @@ export async function readHTTPResponse(socket: Socket, method: string, close: ()
   for (const name of (headers.get('connection') ?? '').split(',')) if (name.trim()) headers.delete(name.trim())
   for (const name of ['connection','transfer-encoding','keep-alive','proxy-connection']) headers.delete(name)
   if (method === 'HEAD' || [204,205,304].includes(status)) {
-    await close()
-    return new Response(null,{status,headers})
+    await finish()
+    return new StreamResponse(null,{status,statusText,headers})
   }
   let remaining = length === null ? Infinity : Number(length), chunkLeft = 0, chunkCRLF = false, received = 0
   const stream = new ReadableStream<Uint8Array>({
@@ -150,13 +191,13 @@ export async function readHTTPResponse(socket: Socket, method: string, close: ()
             if (!/^[0-9a-fA-F]+(?:;[\x20-\x7e]*)?$/.test(text)) throw new Error('Invalid HTTP chunk size')
             chunkLeft = parseInt(text.split(';')[0],16)
             if (!Number.isSafeInteger(chunkLeft)) throw new Error('Invalid HTTP chunk size')
-            if (!chunkLeft) { await fields(); await close(); controller.close(); return }
+            if (!chunkLeft) { await fields(); await finish(); controller.close(); return }
           }
-        } else if (!remaining) { await close(); controller.close(); return }
+        } else if (!remaining) { await finish(); controller.close(); return }
         while (!buffer.length && !ended) await more()
         if (!buffer.length) {
           if (transfer || remaining !== Infinity) throw new Error('Truncated HTTP body')
-          await close(); controller.close(); return
+          await finish(); controller.close(); return
         }
         const count = Math.min(buffer.length,transfer ? chunkLeft : remaining)
         received += count
@@ -164,9 +205,9 @@ export async function readHTTPResponse(socket: Socket, method: string, close: ()
         const bytes = buffer.slice(0,count); buffer=buffer.slice(count)
         if (transfer) { chunkLeft-=count; chunkCRLF=chunkLeft===0 } else remaining-=count
         controller.enqueue(bytes)
-      } catch (error) { await close(); controller.error(error) }
+      } catch (error) { void close().catch(()=>{}); controller.error(error) }
     },
     cancel: close,
   }, {highWaterMark:0})
-  return new Response(stream,{status,headers})
+  return new StreamResponse(stream,{status,statusText,headers})
 }

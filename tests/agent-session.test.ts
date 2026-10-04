@@ -1,4 +1,4 @@
-import {describe,it,expect} from 'vitest'
+import {describe,it,expect,vi} from 'vitest'
 import {AgentSession,AGENT_TOOL_DEFINITIONS} from '../src/sdk/agent-session'
 
 const delay=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms))
@@ -20,6 +20,61 @@ class FakeKernel {
 }
 
 describe('AgentSession',()=>{
+  it('forwards a copy of command-local environment values',async()=>{
+    const kernel=new FakeKernel(),spawn=vi.fn((_command:string,_args:string[],_options:{cwd?:string;env?:Record<string,string>})=>kernel.spawn())
+    const session=new AgentSession({}, {kernel:{spawn} as never})
+    const env={VALUE:`a'b $HOME`}
+    await session.run({command:'node',args:['app.js'],cwd:'/app',env})
+    expect(spawn).toHaveBeenCalledWith('node',['app.js'],{cwd:'/app',env:{VALUE:`a'b $HOME`}})
+    expect(spawn.mock.calls[0][2].env).not.toBe(env)
+  })
+  it('rejects malformed environment maps before spawning',async()=>{
+    const spawn=vi.fn(),session=new AgentSession({}, {kernel:{spawn} as never})
+    for(const env of [null,[],{'bad=name':'x'},{VALUE:1},{VALUE:'bad\0value'}]){
+      await expect(session.run({command:'node',env:env as never})).rejects.toThrow('Invalid process environment')
+    }
+    expect(spawn).not.toHaveBeenCalled()
+  })
+  it('defaults listing to the backend workspace root without rewriting paths',async()=>{
+    const call=vi.fn(async()=>[{name:'value.txt',relativePath:'value.txt',kind:'file'}])
+    const session=new AgentSession({}, {kernel:{workspaceRoot:'/app',openFileSession:async()=>({call,close:async()=>{}})} as never})
+    expect(await session.list()).toEqual([{path:'/app/value.txt',kind:'file'}])
+    expect(call).toHaveBeenCalledWith('readdir',['/app',{recursive:true,withFileTypes:true}])
+  })
+  it('reports native owner resources without fabricated kernel metrics',async()=>{
+    const resources={scope:'native-owner' as const,running:true,starting:false,commands:1,terminalSessions:0,responseStreams:0,sockets:0,mutations:1,installing:false}
+    const session=new AgentSession({}, {kernel:{resources:async()=>resources} as never,telemetry:{capacity:4}})
+    expect(await session.resources()).toEqual(resources)
+    expect(session.telemetry?.events()).toEqual([{sequence:1,type:'resources.native-owner',...resources}])
+  })
+  it('rejects malformed argument vectors before acquiring a process',async()=>{
+    const spawn=vi.fn(),session=new AgentSession({}, {kernel:{spawn} as never})
+    for(const args of ['not an array',[1],['bad\0arg']]){
+      await expect(session.run({command:'node',args:args as never})).rejects.toThrow('Invalid process command or arguments')
+    }
+    expect(spawn).not.toHaveBeenCalled()
+  })
+  it('does not expand a truncated UTF8 prefix into a replacement character',async()=>{
+    let index=0
+    const session=new AgentSession({}, {maxOutputBytes:1,kernel:{spawn:async()=>({
+      next:async()=>index++===0?{type:'stdout',bytes:new TextEncoder().encode('é')}:{type:'exit',code:0,signal:null},
+      wait:async()=>({exitCode:0,signal:null}),dispose:async()=>{},kill:async()=>true,
+    })} as never})
+    expect(await session.run({command:'node'})).toMatchObject({stdout:'',stderr:'',truncated:true,status:0})
+  })
+  it('does not decode or retain empty chunks after the shared output budget is exhausted',async()=>{
+    let count=0
+    const decode=vi.spyOn(TextDecoder.prototype,'decode')
+    const session=new AgentSession({}, {maxOutputBytes:1,kernel:{spawn:async()=>({
+      next:async()=>count++<1000?{type:'stdout',bytes:new Uint8Array([120])}:{type:'exit',code:0,signal:null},
+      wait:async()=>({exitCode:0,signal:null}),dispose:async()=>{},kill:async()=>true,
+    })} as never})
+    try{
+      expect(await session.run({command:'node'})).toMatchObject({stdout:'x',stderr:'',truncated:true,status:0})
+      expect(decode.mock.calls.filter(([bytes])=>bytes!==undefined)).toHaveLength(1)
+      expect(count).toBe(1001)
+    }finally{decode.mockRestore()}
+  })
   it('has model-agnostic schemas and JSON-safe file, process, snapshot and error results',async()=>{
     const kernel=new FakeKernel(),session=new AgentSession({}, {kernel:kernel as never,maxOutputBytes:16})
     expect(AGENT_TOOL_DEFINITIONS.map(tool=>tool.name)).toEqual(['list','read','write','mkdir','remove','move','install','run','snapshot','restore','resources','close'])

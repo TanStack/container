@@ -59,6 +59,7 @@ scope.shellSpawn=async(argsJSON:string,cwd:string,envJSON:string,read:()=>Promis
   }
 }
 let initialized=false
+let running=false
 self.onmessage=async({data})=>{
   if(data.init){
     try{
@@ -73,9 +74,13 @@ self.onmessage=async({data})=>{
     pending.delete(data.reply);data.error?call.reject(Object.assign(Error(data.error),{code:data.code})):call.resolve(data.value)
     return
   }
+  if(data.interrupt){scope.goShellInterrupt?.();return}
   if(data.run){
-    try{postMessage({result:await scope.goShell(data.script,data.timeoutMs,data.cwd,JSON.stringify(data.env),data.stdin,data.streaming===true)})}
+    if(running){postMessage({error:'Shell command already running'});return}
+    running=true
+    try{postMessage({result:await scope.goShell(data.script,data.timeoutMs,data.cwd,JSON.stringify(data.env),data.stdin,data.streaming===true,data.shellState??'',data.persistent===true)})}
     catch(error){postMessage({error:String(error)})}
+    finally{running=false}
   }
 }
 async function initialize(assetBaseURL:string){

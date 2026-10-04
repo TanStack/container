@@ -5,6 +5,7 @@ import process from 'node:process'
 
 const fail=(code,message=code)=>Object.assign(Error(message),{code})
 const transport=()=>{const net=globalThis.__webContainerHost.net;if(!net)throw fail('ERR_UNSUPPORTED_OPERATION','Virtual sockets require the worker-owned kernel');return net}
+const commandHandle=(handle,active)=>globalThis[Symbol.for('web-container:command-handle')]?.(handle,active)
 function options(args){
   const callback=typeof args.at(-1)==='function'?args.pop():undefined
   const first=args[0]
@@ -16,6 +17,8 @@ function options(args){
 }
 
 export class Socket extends Duplex {
+  #resetConnection=false
+  #closeHandle={}
   constructor(settings={}){
     if(settings.fd!==undefined)throw fail('ERR_UNSUPPORTED_OPERATION','Host file descriptors are unavailable')
     super({...settings,allowHalfOpen:settings.allowHalfOpen??false,autoDestroy:true,emitClose:false})
@@ -29,6 +32,7 @@ export class Socket extends Duplex {
     this._id=value.id;this.localAddress=this.remoteAddress='127.0.0.1';this.localFamily=this.remoteFamily='IPv4'
     this.localPort=value.port;this.remotePort=value.remotePort;this.connecting=false;this.pending=false
     transport().call('ref',this._id,this._referenced);this._resolveReady();this._activity()
+    if(this._referenced)commandHandle(this,true)
     if(this._wantRead)this._pump()
   }
   connect(...args){
@@ -36,6 +40,7 @@ export class Socket extends Duplex {
     const {port,host,callback}=options(args)
     if(callback)this.once('connect',callback)
     this.connecting=true
+    if(this._referenced)commandHandle(this,true)
     process.nextTick(()=>{
       if(this.destroyed)return
       try{this._attach(transport().call('connect',port,host));this.emit('connect');this.emit('ready')}
@@ -66,16 +71,21 @@ export class Socket extends Duplex {
     }).then(()=>callback(),callback)
   }
   _final(callback){this._ready.then(()=>transport().call('end',this._id)).then(()=>callback(),callback)}
+  destroy(...args){
+    if(!this.destroyed)commandHandle(this.#closeHandle,true)
+    return super.destroy(...args)
+  }
   _destroy(error,callback){
     clearTimeout(this._timer);this.connecting=false;this.pending=true
+    commandHandle(this,false)
     this._rejectReady(error??fail('ERR_STREAM_DESTROYED'))
-    if(this._id!==undefined){try{transport().call('destroy',this._id)}catch{}this._id=undefined}
+    if(this._id!==undefined){try{transport().call('destroy',this._id,this.#resetConnection)}catch{}this._id=undefined}
     callback(error)
-    process.nextTick(()=>this.emit('close',!!error))
+    process.nextTick(()=>{try{this.emit('close',!!error)}finally{commandHandle(this.#closeHandle,false)}})
   }
   address(){return this._id===undefined?{}:{address:this.localAddress,family:this.localFamily,port:this.localPort}}
-  ref(){this._referenced=true;if(this._id!==undefined)transport().call('ref',this._id,true);return this}
-  unref(){this._referenced=false;if(this._id!==undefined)transport().call('ref',this._id,false);return this}
+  ref(){this._referenced=true;if(this._id!==undefined)transport().call('ref',this._id,true);if(this._id!==undefined||this.connecting)commandHandle(this,true);return this}
+  unref(){this._referenced=false;if(this._id!==undefined)transport().call('ref',this._id,false);if(this._id!==undefined||this.connecting)commandHandle(this,false);return this}
   setTimeout(ms,callback){
     if(!Number.isFinite(ms)||ms<0)throw fail('ERR_OUT_OF_RANGE')
     this.timeout=ms;if(callback)this.once('timeout',callback);this._activity();return this
@@ -85,7 +95,12 @@ export class Socket extends Duplex {
   setNoDelay(){return this}
   setKeepAlive(){return this}
   destroySoon(){if(this.writableFinished)this.destroy();else {this.once('finish',()=>this.destroy());this.end()}}
-  resetAndDestroy(){return this.destroy(fail('ECONNRESET'))}
+  resetAndDestroy(){
+    if(this.destroyed)return this
+    if(this.connecting){this.once('connect',()=>this.resetAndDestroy());return this}
+    if(this._id===undefined)return this.destroy(fail('ERR_SOCKET_CLOSED','Socket is closed'))
+    this.#resetConnection=true;return this.destroy()
+  }
   get bufferSize(){return this.writableLength}
   get readyState(){return this.connecting?'opening':this.destroyed?'closed':this.readable&&this.writable?'open':this.readable?'readOnly':this.writable?'writeOnly':'closed'}
 }
@@ -105,6 +120,7 @@ export class Server extends EventEmitter {
       const value=transport().call('listen',port,host,shareKey);this._id=value.id;this._port=value.port;this.listening=true
       if(shareKey)globalThis.__webContainerClusterServer?.(this)
       transport().call('ref',this._id,this._referenced)
+      if(this._referenced)commandHandle(this,true)
       process.nextTick(()=>{if(this.listening){const address=this.address();globalThis.__webContainerClusterListening?.(address);this.emit('listening')}this._accept()})
     }catch(error){process.nextTick(()=>this.emit('error',error))}
     return this
@@ -117,7 +133,7 @@ export class Server extends EventEmitter {
         if(this.maxConnections!==undefined&&transport().call('connections',this._id)>this.maxConnections)socket.destroy()
         else this.emit('connection',socket)
         this._accept()
-      }else if(event?.type==='close'||event===null){this._id=undefined;this.listening=false;this.emit('close')}
+      }else if(event?.type==='close'||event===null){this._id=undefined;this.listening=false;commandHandle(this,false);this.emit('close')}
     }),error=>globalThis[Symbol.for('web-container:task-queue')].task(this.emit,this,['error',error])).catch(error=>globalThis.__webContainerHost.reportError(error))
   }
   close(callback){
@@ -127,8 +143,8 @@ export class Server extends EventEmitter {
   }
   address(){return !this.listening?null:{address:'127.0.0.1',family:'IPv4',port:this._port}}
   getConnections(callback){process.nextTick(()=>callback(null,this._id===undefined?0:transport().call('connections',this._id)))}
-  ref(){this._referenced=true;if(this._id!==undefined)transport().call('ref',this._id,true);return this}
-  unref(){this._referenced=false;if(this._id!==undefined)transport().call('ref',this._id,false);return this}
+  ref(){this._referenced=true;if(this._id!==undefined){transport().call('ref',this._id,true);commandHandle(this,true)}return this}
+  unref(){this._referenced=false;if(this._id!==undefined){transport().call('ref',this._id,false);commandHandle(this,false)}return this}
 }
 export const createServer=(...args)=>new Server(...args)
 export const createConnection=(...args)=>new Socket().connect(...args)

@@ -26,6 +26,8 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           npm ci --prefix tests/fixtures/rolldown-native-probe --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tests/fixtures/native-runtime-832 --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tests/fixtures/wasi-filesystem-codec-114 --ignore-scripts --no-audit --no-fund
       # These are source and packaging checks, not browser or native-build acceptance.
       - name: Check source snapshots and package setup
         run: |
@@ -44,3 +46,39 @@ jobs:
           node --test --test-concurrency=1 \
             tests/guest-buffer-native-utf8.test.mjs \
             tests/guest-buffer-utf16-write.test.mjs
+      - name: Check release configuration and versioning
+        run: npm run test:release
+      - name: Check full-site acceptance accounting
+        run: |
+          npm run test:native-site-harness
+          node --test tests/native-site-project-inputs.test.mjs
+          node --test tests/native-browser-diagnostic.test.mjs
+          node --test tests/native-terminal-viewport.test.mjs
+          node --test tests/native-site-terminal-matrix.test.mjs
+          node --test tests/native-terminal-screen.test.mjs
+          node --test tests/native-terminal-settlement.test.mjs
+      - name: Check Vite request diagnostics
+        run: npx --no-install vitest run tests/native-vite-request-observation.test.ts
+      - name: Check callable resolver probe accounting
+        run: node --test tests/native-callable-resolver.test.mjs tests/native-vite-private-imports.test.mjs tests/native-owner-workflows.test.mjs
+      - name: Check installed production matrix accounting
+        run: node --test tests/native-owner-production.test.mjs tests/native-streaming-node-control.test.mjs
+      - name: Check private-import callback diagnostics against pinned Vite sources
+        run: node --test tests/vite-private-callback-trace.test.mjs
+      - name: Check WASI file-proxy failure controls
+        run: node --test tests/native-wasi-fs-proxy.test.mjs tests/wasi-fs-proxy-trace.test.mjs
+      - name: Check synchronous native worker completion and pool reuse
+        run: node --test tests/native-wasi-thread-completion.test.mjs tests/native-oxide-build.test.mjs tests/supplemental-rust-notices.test.mjs tests/compiler-input-paths.test.mjs tests/compiler-package-staging.test.mjs
+      - name: Check compiler filesystem lifecycle and descriptor stats
+        run: |
+          node --test tests/native-compiler-fs-lifecycle.test.mjs
+          npx --no-install vitest run tests/native-compiler-fs-stat.test.ts tests/native-compiler-filesystem-registry.test.ts tests/native-node-fs.test.ts
+      - name: Check installer and terminal public filesystem operations
+        run: |
+          node --test tests/native-filesystem-operations.test.mjs tests/native-filesystem-async-api.test.mjs tests/native-filesystem-stream-api.test.mjs tests/native-filesystem-client-api.test.mjs tests/native-filesystem-stat-dates.test.mjs tests/native-filesystem-directory.test.mjs tests/native-disposal-symbols.test.mjs
+          npx --no-install vitest run tests/native-volume-file-system.test.ts tests/native-live-package-install.test.ts tests/native-terminal-file-session.test.ts tests/native-terminal-processes.test.ts tests/native-sync-file-bridge.test.ts tests/native-node-fs-streams.test.ts
+      - name: Check preview interaction diagnostics
+        run: node --test tests/native-preview-interaction-observation.test.mjs tests/native-preview-click-listener-observation.test.mjs
+      - name: Check owned WASI filesystem transport against pinned codecs
+        run: |
+          node --test tests/native-filesystem-startup.test.mjs tests/native-filesystem-cursors.test.mjs tests/native-filesystem-watch-client.test.mjs tests/native-filesystem-consumers.test.mjs tests/wasi-fs-proxy-transport.test.mjs tests/wasi-filesystem-service.test.mjs tests/wasi-filesystem-service-codecs.test.mjs tests/wasi-filesystem-service-lifecycle.test.mjs tests/wasi-filesystem-service-buffer.test.mjs

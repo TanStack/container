@@ -2,6 +2,7 @@ import {cpSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync} f
 import {dirname, basename, join, resolve, relative, isAbsolute, sep} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {verifySDK} from './verify-sdk.mjs'
+export {createNativeOwnerHostAssets} from './native-owner-host-assets.mjs'
 
 function packageRoot() {
   return dirname(fileURLToPath(import.meta.url))

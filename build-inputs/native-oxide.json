@@ -1,0 +1,20 @@
+{
+  "format": 1,
+  "sourceURL": "https://codeload.github.com/tailwindlabs/tailwindcss/legacy.tar.gz/c2b24dd15fed1c59dd521bd86082f520c9f5ad0d",
+  "revision": "c2b24dd15fed1c59dd521bd86082f520c9f5ad0d",
+  "archiveSHA256": "4d8b1ec43991a36371afea925d502c3c548ff6e05eef053b25f58e76463b7700",
+  "archivePrefix": "tailwindlabs-tailwindcss-c2b24dd",
+  "patch": "patches/oxide-wasi-directory-entries.patch",
+  "patchSHA256": "8b0ba32b36f9be103fff0b7b8d83cda1e8f8dbb97af7ceedd14440f8d7fd4e65",
+  "patchedFile": "crates/ignore/src/walk.rs",
+  "beforeSHA256": "6d18db09b7d202b435ead9932ab96e91f6cd0d8d92099ee520b9a91205c91796",
+  "afterSHA256": "2cddb367c7839a15273eaab705821965d782588f2afde948b3f75d19715d685e",
+  "cargoLockSHA256": "d8bf05fa0ea227c2f7104b49a407e9e693424ae715c5c25b7db9062c98a89d87",
+  "rustVersion": "1.95.0",
+  "rustCommit": "59807616e1fa2540724bfbac14d7976d7e4a3860",
+  "target": "wasm32-wasip1-threads",
+  "package": "tailwind-oxide",
+  "emnapiVersion": "1.11.1",
+  "toolchainLockSHA256": "860420154dbcb4064bff18b2ea3b80a5171d3a1c1491e8a5cdbff27c0849da65",
+  "emnapiLibrarySHA256": "2d1a49de33c9940a5907a6068b0ab0b64d0c47a2a7f0926b7f00e57aa2f91c07"
+}

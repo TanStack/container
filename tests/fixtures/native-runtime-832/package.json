@@ -1,0 +1,10 @@
+{
+  "name": "container-native-runtime-832-build-inputs",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "@rolldown/browser": "1.2.12",
+    "vite": "8.3.2"
+  }
+}

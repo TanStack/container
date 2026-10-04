@@ -1,19 +1,25 @@
-import {WorkerKernel as Kernel} from '../sandbox/kernel'
-import type {KernelOwnerOptions} from '../sandbox/kernel-limits'
-
-/** Versioned feature-detection contract for hosts embedding this experimental SDK. */
-export const SDK_COMPATIBILITY={apiVersion:6,stability:'experimental'} as const
-
-/** Experimental SDK. Host these trusted assets on the application's origin. */
-export class WorkerKernel extends Kernel {
-  constructor(files:Record<string,string|Uint8Array>={},options:KernelOwnerOptions={}){
-    super(files,{...options,assetBaseURL:options.assetBaseURL??new URL('./runtime/',import.meta.url).href})
-  }
-}
+export {SDK_COMPATIBILITY} from './compatibility'
+export {WorkerKernel} from './worker-kernel'
 export {HostedKernel} from './hosted-kernel'
 export type {HostedKernelOptions,HostedPreviewOptions} from './hosted-kernel'
 export type {HostCapabilities} from './host-protocol'
 export {WorkerHTTP} from '../sandbox/worker-http'
+export {NativeDevServer} from '../native/dev-server'
+export type {NativeDevServerOptions,NativeDevServerEvent} from '../native/dev-server'
+export type {NativeTerminalOutput,NativeTerminalResult} from '../native/terminal-types'
+export {NativeAgentFileSession} from '../native/agent-file-session'
+export type {NativeAgentFileBackend} from '../native/agent-file-session'
+export {runNativeAgentCommand} from '../native/agent-command'
+export {spawnNativeAgentProcess} from '../native/agent-process'
+export {installNativeAgentProject} from '../native/agent-install'
+export type {NativeAgentInstallBackend} from '../native/agent-install'
+export type {NativeOwnerResourceSnapshot} from '../native/owner-resources'
+export type {AgentResourceSnapshot} from './agent-session'
+export {NativeAgentBackend} from '../native/agent-backend'
+export type {NativeAgentCommandBackend,NativeAgentCommandOptions} from '../native/agent-command'
+export type {NativeRuntimeCandidate} from '../native/runtime-selection'
+export {prepareNativeRuntime} from '../native/prepare-runtime'
+export {NativeOwnerClient,installNativeOwnerHost} from '../native/owner-transport'
 export {WorkerWebSocket} from '../sandbox/worker-websocket'
 export {URLPreview} from '../sandbox/url-preview'
 export {runMvdanShell} from '../sandbox/mvdan-shell'
@@ -21,7 +27,7 @@ export {runShell} from './shell'
 export {installProjectCommand,spawnProjectCommand} from './project-command'
 export type {InstallProjectCommandOptions,SpawnProjectCommandOptions,ProjectCommandKernel} from './project-command'
 export {AgentSession,AGENT_TOOL_DEFINITIONS} from './agent-session'
-export type {AgentSessionOptions,AgentToolResult,AgentWorkspaceSnapshot,AgentWorkspaceBinarySnapshot,AgentSnapshotOptions} from './agent-session'
+export type {AgentSessionOptions,AgentSessionBackend,AgentProcessHandle,AgentToolResult,AgentWorkspaceSnapshot,AgentWorkspaceBinarySnapshot,AgentSnapshotOptions} from './agent-session'
 export {SandboxTelemetry} from './telemetry'
 export type {SandboxTelemetryEvent,SandboxTelemetryOptions} from './telemetry'
 export {resolveSDKRuntimeProfile,assertSDKRuntimeEnvironment} from './runtime-profile'

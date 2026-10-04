@@ -2,6 +2,7 @@ import {lstatSync, readdirSync, readFileSync} from 'node:fs'
 import {resolve, join} from 'node:path'
 import {pathToFileURL} from 'node:url'
 import {createHash} from 'node:crypto'
+import {assertNativeSDKModuleGraph,assertNativeSDKRuntimePaths} from './native-sdk-boundary.mjs'
 import {verifySDKEngineManifest} from './sdk-build-profiles.mjs'
 import {isAlphaSDKVersion,isSupportedSDKLicense} from './sdk-license-policy.mjs'
 
@@ -59,6 +60,58 @@ export function verifyRolldownParser(root,claim,seen){
   for(const name of ['ROLLDOWN-LICENSE','ROLLDOWN-THIRD-PARTY-LICENSE'])assert(seen.has('licenses/'+name),'Missing native parser notice: '+name)
 }
 
+export function verifyNativeRuntime(root,claim,seen,prefix='runtime/native/'){
+  if(claim?.runtimes){
+    assert(Array.isArray(claim.runtimes)&&claim.runtimes.length>0,'Empty native runtime catalog')
+    const entries=new Set()
+    for(const runtime of claim.runtimes){
+      const {vite,rolldown}=runtime.toolchain??{}
+      assert([vite,rolldown].every(version=>typeof version==='string'&&/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)),'Invalid native runtime toolchain')
+      const path=`runtime/native/vite-${vite}-rolldown-${rolldown}/`
+      assert(!entries.has(path),'Duplicate native runtime catalog entry');entries.add(path)
+      verifyNativeRuntime(root,runtime,seen,path)
+    }
+    assert(claim.externalAssets.length===claim.runtimes.length*2,'Incomplete native runtime catalog assets')
+    assert(JSON.stringify(claim.externalAssets)===JSON.stringify(claim.runtimes.flatMap(runtime=>runtime.externalAssets)),'Native runtime catalog asset mismatch')
+    for(const file of seen)if(file.startsWith('runtime/native/'))
+      assert([...entries].some(entry=>file.startsWith(entry)),'Unlisted native runtime catalog file: '+file)
+    assert(claim.noticeTextCoverageComplete===claim.runtimes.every(runtime=>runtime.noticeTextCoverageComplete)&&
+      claim.distributionReviewComplete===claim.runtimes.every(runtime=>runtime.distributionReviewComplete)&&
+      JSON.stringify(claim.missingNoticeText)===JSON.stringify(claim.runtimes.flatMap(runtime=>runtime.missingNoticeText)),
+      'Native runtime catalog notice summary mismatch')
+    return
+  }
+  const included=[...seen].filter(path=>path.startsWith('runtime/native/'))
+  if(claim===undefined){assert(included.length===0,'Native runtime files require manifest metadata');return}
+  assert(claim.entry===prefix+'engine.js'&&/^[a-f0-9]{64}$/.test(claim.engineSHA256),
+    'Invalid native runtime entry identity')
+  for(const path of [claim.entry,...['filesystem-owner.mjs','SHIPPED-INPUTS.json','THIRD-PARTY-NOTICES.txt','esbuild.wasm',
+    'rolldown-binding.wasm32-wasi.wasm','oxide/tailwindcss-oxide.wasm32-wasi.wasm'].map(name=>prefix+name)])assert(seen.has(path),'Missing native runtime file: '+path)
+  assert(createHash('sha256').update(readFileSync(join(root,claim.entry))).digest('hex')===claim.engineSHA256,
+    'Native worker digest mismatch')
+  const evidence=JSON.parse(readFileSync(join(root,prefix+'SHIPPED-INPUTS.json'),'utf8'))
+  if(claim.toolchain)for(const [name,packageName] of [['vite','vite'],['rolldown','@rolldown/browser']]){
+    const versions=[...new Set(evidence.packages.filter(item=>item.name===packageName).map(item=>item.version))]
+    assert(versions.length===1&&versions[0]===claim.toolchain[name]&&evidence.toolchain?.[name]===versions[0],
+      'Native runtime compiler identity mismatch: '+name)
+  }
+  assert(evidence.format===1&&JSON.stringify(evidence.missingNoticeText)===JSON.stringify(claim.missingNoticeText)&&
+    evidence.noticeTextCoverageComplete===claim.noticeTextCoverageComplete&&
+    evidence.distributionReviewComplete===claim.distributionReviewComplete,
+  'Native runtime notice evidence differs from manifest')
+  assert(claim.noticeTextCoverageComplete===(claim.missingNoticeText.length===0),
+    'Native runtime notice coverage is inconsistent')
+  assert(Array.isArray(claim.externalAssets)&&claim.externalAssets.length===2,
+    'Native runtime external compiler assets are missing')
+  for(const asset of claim.externalAssets){
+    assert([prefix+'esbuild.wasm',prefix+'rolldown-binding.wasm32-wasi.wasm'].includes(asset.path)&&
+      seen.has(asset.path)&&/^[a-f0-9]{64}$/.test(asset.sha256),
+    'Invalid native runtime external asset')
+    assert(createHash('sha256').update(readFileSync(join(root,asset.path))).digest('hex')===asset.sha256,
+      'Native runtime external asset hash mismatch: '+asset.path)
+  }
+}
+
 function verifyLicenseCoverage(root,manifest,seen){
   const claim=manifest.licenseCoverage
   assert(claim&&claim.path==='licenses/SHIPPED-INPUTS.json'&&Number.isSafeInteger(claim.packageCount),'Missing SDK license coverage metadata')
@@ -77,6 +130,22 @@ function verifyLicenseCoverage(root,manifest,seen){
   }else assert(coverage.projectLicense===undefined,'Private SDK candidate cannot claim a shipped-input project license')
   const prefixes=[...(coverage.generatedBundles.artifacts??[]),...(coverage.native??[]).flatMap(item=>item.artifacts??[]),...(coverage.localArtifacts??[])]
   for(const path of seen)assert(prefixes.some(prefix=>prefix.endsWith('/')?path.startsWith(prefix):path===prefix),'Uncovered shipped SDK file: '+path)
+}
+
+export function verifyNativeBrowserEntry(root,claim,seen){
+  const present=seen.has('native.js')||seen.has('native-entry-graph.json')||[...seen].some(path=>path.startsWith('native-chunks/'))
+  if(claim===undefined){assert(!present,'Native browser entry requires module graph evidence');return}
+  assert(claim.format===1&&claim.scope==='native-browser-entry'&&['native.js','index.js'].includes(claim.entry)&&
+    claim.runtimeAssetsIncluded===false&&claim.releaseApproved===false,'Invalid native browser entry metadata')
+  assert(seen.has(claim.entry)&&seen.has('native-entry-graph.json'),'Missing native browser entry evidence')
+  const stored=JSON.parse(readFileSync(join(root,'native-entry-graph.json'),'utf8'))
+  assert(JSON.stringify(stored)===JSON.stringify(claim),'Native browser entry evidence differs from manifest')
+  assert(Array.isArray(claim.modules)&&claim.modules.length>0&&
+    Array.isArray(claim.legacyRuntimeModules)&&claim.legacyRuntimeModules.length===0,'Invalid native browser module inventory')
+  assert(JSON.stringify(assertNativeSDKModuleGraph(claim.modules))===JSON.stringify(claim.modules),'Native browser module inventory must be unique and sorted')
+  assert(claim.modules.includes('src/sdk/native.ts')&&claim.modules.includes('src/sdk/agent-session-core.ts'),'Native browser entry is missing its source entry or agent core')
+  const bytes=readFileSync(join(root,claim.entry))
+  assert(bytes.length===claim.entryBytes&&createHash('sha256').update(bytes).digest('hex')===claim.entrySHA256,'Native browser entry digest mismatch')
 }
 
 function verifyAPIContract(root,manifest,seen){
@@ -103,6 +172,10 @@ function verifyAPIContract(root,manifest,seen){
     assert(declaration.length===item.bytes&&createHash('sha256').update(declaration).digest('hex')===item.sha256,'API declaration hash mismatch: '+item.path)
   }
   for(const entry of Object.values(contract.entrypoints))assert(declarations.has(entry.types.replace(/^\.\//,'')),'API entry declaration is missing from contract')
+  if(manifest.nativeBrowserEntry){
+    assert(contract.entrypoints['./native']&&packageManifest.exports?.['./native']?.types===contract.entrypoints['./native'].types&&
+      packageManifest.exports?.['./native']?.import==='./'+manifest.nativeBrowserEntry.entry,'Missing native browser entry export')
+  }
 }
 
 function verifyProjectLicense(root,manifest,seen){
@@ -270,19 +343,37 @@ export function verifySDK(directory) {
   verifyAPIContract(root,manifest,seen)
   verifyCompatibilityPolicy(root,manifest,seen)
   verifySizeReport(root,manifest,seen)
-  verifySDKEngineManifest(root, manifest)
+  const nativeOnly=manifest.buildProfile==='native'
+  if(nativeOnly){
+    assert(manifest.engines&&Object.keys(manifest.engines).length===0,'Native SDK cannot claim QuickJS engines')
+    assert(manifest.nativeRuntime&&manifest.nativeBrowserEntry?.entry==='index.js','Native SDK requires a runtime catalog and native root entry')
+    assert(manifest.fsCopy===undefined&&manifest.experimentalCompiler===undefined&&manifest.experimentalRolldownParser===undefined,'Native SDK cannot claim legacy compatibility assets')
+    assertNativeSDKRuntimePaths(seen)
+    const contract=JSON.parse(readFileSync(join(root,'api-contract.json'),'utf8'))
+    const names=contract.entrypoints['.'].exports.map(item=>item.name)
+    assert(contract.apiVersion>=8&&names.includes('NativeOwnerClient')&&names.includes('AgentSession')&&
+      !names.some(name=>['WorkerKernel','HostedKernel','runMvdanShell','runShell','resolveSDKRuntimeProfile'].includes(name)),
+      'Native SDK root exports do not match its runtime profile')
+  }else verifySDKEngineManifest(root, manifest)
   verifyRolldownParser(root,manifest.experimentalRolldownParser,seen)
+  verifyNativeRuntime(root,manifest.nativeRuntime,seen)
+  verifyNativeBrowserEntry(root,manifest.nativeBrowserEntry,seen)
   if(manifest.fsCopy!==undefined)assert(JSON.stringify(manifest.fsCopy)===JSON.stringify(inspectSDKFSCopy(root)),'Invalid filesystem copy compatibility metadata')
   const shell=manifest.shell
-  assert(shell?.api==='one-shot'&&shell.implementation==='mvdan.cc/sh/v3'&&shell.version==='3.14.1','Invalid shell compatibility metadata')
-  assert(shell.statePersistence===false&&shell.terminal===false&&shell.numericFdRedirection==='unsupported'&&shell.externalCommands==='kernel-processes','Invalid shell capability metadata')
+  assert(shell?.api===(nativeOnly?'native-terminal':'one-shot')&&shell.implementation==='mvdan.cc/sh/v3'&&shell.version==='3.14.1','Invalid shell compatibility metadata')
+  if(nativeOnly){
+    assert(shell.worker==='runtime/workers/mvdan-shell.js'&&seen.has(shell.worker),'Native SDK requires its terminal shell worker')
+    for(const path of ['runtime/mvdan-shell/wasm_exec.js','runtime/mvdan-shell/MVDAN-LICENSE','runtime/mvdan-shell/GO-LICENSE'])assert(seen.has(path),'Missing native terminal support: '+path)
+  }else assert(shell.statePersistence===false&&shell.terminal===false&&shell.numericFdRedirection==='unsupported'&&shell.externalCommands==='kernel-processes','Invalid shell capability metadata')
   for(const key of ['wasmSHA256','sourceSHA256','lockSHA256'])assert(/^[a-f0-9]{64}$/.test(shell[key]),'Invalid shell hash: '+key)
   const shellBuild=JSON.parse(readFileSync(join(root,'runtime/mvdan-shell/build.json'),'utf8'))
-  assert(JSON.stringify(shell.goBuild)===JSON.stringify({trimpath:true,ldflags:['-s','-w']})&&JSON.stringify(shellBuild.goBuild)===JSON.stringify(shell.goBuild),'Shell WASM must remove build paths, symbols and DWARF data')
+  assert(JSON.stringify(shell.goBuild)===JSON.stringify({trimpath:true,buildvcs:false,ldflags:['-s','-w']})&&JSON.stringify(shellBuild.goBuild)===JSON.stringify(shell.goBuild),'Shell WASM must remove build paths, VCS stamps, symbols and DWARF data')
   assert(shellBuild.mvdan===shell.version&&shellBuild.wasmSHA256===shell.wasmSHA256&&shellBuild.sourceSHA256===shell.sourceSHA256&&shellBuild.lockSHA256===shell.lockSHA256,'Shell metadata does not match packaged artifacts')
   const shellWasm=readFileSync(join(root,'runtime/mvdan-shell/shell.wasm'))
   assert(createHash('sha256').update(shellWasm).digest('hex')===shell.wasmSHA256,'Shell WASM hash mismatch')
-  for (const path of ['index.js', 'kernel-host.html', 'kernel-host.js', 'package.json', 'preview-host/hosting.json']) assert(seen.has(path), 'Missing SDK entry: ' + path)
+  for(const path of ['index.js','package.json','preview-host/hosting.json'])assert(seen.has(path),'Missing SDK entry: '+path)
+  if(!nativeOnly){
+  for(const path of ['kernel-host.html','kernel-host.js'])assert(seen.has(path),'Missing SDK entry: '+path)
   const kernelHostHTML=readFileSync(join(root,'kernel-host.html'),'utf8')
   assert(/<script\s+type=["']module["']\s+src=["']\.\/kernel-host\.js["']\s*><\/script>/.test(kernelHostHTML),'Kernel host HTML must load the packaged module entry')
   const kernelHostJS=readFileSync(join(root,'kernel-host.js'),'utf8')
@@ -301,6 +392,7 @@ export function verifySDK(directory) {
     assert(createHash('sha256').update(compilerWasm).digest('hex')===artifact.hashes['esbuild.wasm'],'Experimental compiler WASM mismatch')
   }
   assert(seen.has('runtime/workers/compiler.js')&&readFileSync(join(root,'runtime/workers/compiler.js'),'utf8').includes('../compiler/esbuild.wasm'), 'Compiler worker does not reference external WASM')
+  }
   const hosting = JSON.parse(readFileSync(join(root, 'preview-host/hosting.json'), 'utf8'))
   assert(hosting.separateOrigin === true && hosting.secureContext === true && hosting.scope === '/' && hosting.fallbackStatus === 503, 'Unsafe preview hosting policy')
   assert(hosting.embedderPolicy === undefined || hosting.embedderPolicy === 'require-corp', 'Unsupported preview embedder policy')

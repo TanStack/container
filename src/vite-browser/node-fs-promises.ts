@@ -1,4 +1,4 @@
-import fs, { constants } from './node-fs'
+import { constants, promises as filePromises } from './node-fs'
 
 export { constants }
 export const {
@@ -11,6 +11,7 @@ export const {
   mkdir,
   mkdtemp,
   open,
+  opendir,
   readFile,
   readdir,
   readlink,
@@ -20,8 +21,10 @@ export const {
   rmdir,
   stat,
   symlink,
+  truncate,
   unlink,
   utimes,
   writeFile,
-} = fs.promises
-export default fs.promises
+  watch,
+} = filePromises
+export default filePromises

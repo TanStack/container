@@ -20,6 +20,7 @@ const batchedInterpreterCandidate = segmentedInterpreterCandidate+'-batched'
 const nativeUTF8Candidate = batchedInterpreterCandidate+'-native-utf8'
 const nativeUTF8BufferCandidate = nativeUTF8Candidate+'-buffer'
 const guestSamplingCandidate = nativeUTF8Candidate+'-guest-sampling'
+const nativeUTF8BufferSamplingCandidate = nativeUTF8BufferCandidate+'-guest-sampling'
 const initializerParserCandidate = 'experimental-fibers-simd-lazy-initializers-o2-assignments'
 const fairnessCandidate = 'experimental-fibers-simd-lazy-fairness'
 const fiberSlots=['quickjs-als-asyncify-atomics-fibers-shared-storage','quickjs-als-asyncify-wasm-atomics-fibers-shared-storage']
@@ -31,8 +32,8 @@ export function sdkEngineDirectories(profile = 'default') {
     mapping[fiberSlots[1]]+='-buffer'
     return mapping
   }
-  if(profile===guestSamplingCandidate){
-    const mapping=sdkEngineDirectories(nativeUTF8Candidate)
+  if(profile===guestSamplingCandidate||profile===nativeUTF8BufferSamplingCandidate){
+    const mapping=sdkEngineDirectories(profile===nativeUTF8BufferSamplingCandidate?nativeUTF8BufferCandidate:nativeUTF8Candidate)
     mapping[fiberSlots[1]]+='-guest-sampling'
     return mapping
   }
@@ -86,8 +87,8 @@ export function inspectSDKEngine(directory, slot, profile = 'default') {
     }else if(Object.hasOwn(engine.metadata,'nativeUTF8Buffer'))throw Error('SDK engine has unexpected native UTF-8 buffer metadata')
     return {...engine,sourceDirectory:sdkEngineDirectories(profile)[slot]}
   }
-  if(profile===guestSamplingCandidate){
-    const engine=inspectSDKEngine(directory,slot,nativeUTF8Candidate)
+  if(profile===guestSamplingCandidate||profile===nativeUTF8BufferSamplingCandidate){
+    const engine=inspectSDKEngine(directory,slot,profile===nativeUTF8BufferSamplingCandidate?nativeUTF8BufferCandidate:nativeUTF8Candidate)
     const sampling=engine.metadata.guestSampling
     if(slot===fiberSlots[1]){
       if(!sampling||sampling.experimental!==true||sampling.maxSamples!==512||sampling.intervalMs!==20||

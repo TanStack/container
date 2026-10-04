@@ -93,7 +93,7 @@ test('source phase sink pairs concurrent stages and rejects arbitrary metadata w
   assert.equal(messages.length,4)
   assert.equal(messages[2].traceId,second)
   assert.equal(messages[3].traceId,first)
-  for(const stage of ['install-planning','workspace-staging','tar-extraction','package-file-write','workspace-commit']){
+  for(const stage of ['install-planning','workspace-staging','tar-extraction','package-file-write','workspace-commit','archive-download','archive-cache-read','archive-cache-write','gzip-decompression']){
     const id=trace(stage,'begin')
     trace(stage,'end',id)
     assert.equal(messages.at(-2).stage,stage)

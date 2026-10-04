@@ -5,7 +5,8 @@ const origin='https://preview.invalid'
 const cleanups:(()=>void)[]=[]
 afterEach(()=>{for(const cleanup of cleanups.splice(0))cleanup();vi.unstubAllGlobals()})
 
-async function fixture(fetch:(request:Request)=>Promise<Response>,path='/',connectWebSocket?:Parameters<typeof URLPreview.mount>[1]['connectWebSocket'],timeouts:Pick<Parameters<typeof URLPreview.mount>[1],'requestTimeoutMs'|'startupTimeoutMs'|'scriptOrigins'|'connectOrigins'>={}){
+async function fixture(fetch:(request:Request)=>Promise<Response>,path='/',connectWebSocket?:Parameters<typeof URLPreview.mount>[1]['connectWebSocket'],timeouts:Pick<Parameters<typeof URLPreview.mount>[1],'requestTimeoutMs'|'startupTimeoutMs'|'scriptOrigins'|'connectOrigins'>&{revision?:()=>number|Promise<number>}={}){
+  const {revision,...previewOptions}=timeouts
   const bus=new EventTarget(),frames:any[]=[],ports:MessagePort[]=[]
   let ownerPort:MessagePort|undefined,preview:URLPreview|undefined,appended=false
   const emit=(source:any,eventOrigin=origin)=>{
@@ -27,7 +28,7 @@ async function fixture(fetch:(request:Request)=>Promise<Response>,path='/',conne
     },
     body:{append(element:any){queueMicrotask(()=>element.onload?.())}},
   })
-  const result=URLPreview.mount({append(){appended=true}} as unknown as HTMLElement,{origin,server:{fetch},path,connectWebSocket,...timeouts})
+  const result=URLPreview.mount({append(){appended=true}} as unknown as HTMLElement,{origin,server:{fetch,revision},path,connectWebSocket,...previewOptions})
   void result.then(value=>preview=value,()=>{})
   cleanups.push(()=>{preview?.close();for(const port of ports)port.close()})
   await vi.waitFor(()=>expect(appended).toBe(true))
@@ -41,7 +42,27 @@ async function fixture(fetch:(request:Request)=>Promise<Response>,path='/',conne
     },
     async request(path='/',navigation:any={mode:'navigate',destination:'iframe',resultingClientId:'document-1'}){
       const channel=new MessageChannel();ports.push(channel.port1,channel.port2)
-      const response=new Promise<any>(resolve=>{channel.port1.onmessage=event=>{channel.port1.close();resolve(event.data)}})
+      const response=new Promise<any>(resolve=>{
+        let start:any,parts:Uint8Array[]=[],size=0
+        channel.port1.onmessage=event=>{
+          const message=event.data
+          if(message.stream){start=message;channel.port1.postMessage({type:'pull'});return}
+          if(message.type==='chunk'){
+            const bytes=new Uint8Array(message.body)
+            parts.push(bytes);size+=bytes.length
+            channel.port1.postMessage({type:'pull'})
+            return
+          }
+          if(message.type==='done'){
+            const body=new Uint8Array(size)
+            let offset=0
+            for(const part of parts){body.set(part,offset);offset+=part.length}
+            channel.port1.close();resolve({...start,body:body.buffer})
+            return
+          }
+          channel.port1.close();resolve(start?{...start,error:message.error}:message)
+        }
+      })
       ownerPort!.postMessage({type:'request',url:origin+path,method:'GET',headers:[],navigation},[channel.port2])
       return response
     },
@@ -49,6 +70,56 @@ async function fixture(fetch:(request:Request)=>Promise<Response>,path='/',conne
   }
 }
 const html=()=>new Response('<html><head></head><body>App</body></html>',{headers:{'content-type':'text/html'}})
+
+it('reloads a document once when a workspace edit precedes its WebSocket connection',async()=>{
+  let revision=0,accept:((socket:any)=>void)|undefined
+  const dispose=vi.fn(async()=>{})
+  const f=await fixture(async()=>html(),'/',()=>new Promise(resolve=>{accept=resolve}),{revision:()=>revision})
+  f.announce();await f.result
+  await f.request()
+  const first=f.socket()
+  await vi.waitFor(()=>expect(accept).toBeTypeOf('function'))
+  revision=1
+  f.frames[0].src=''
+  accept!({protocol:'vite-hmr',dispose})
+  await vi.waitFor(()=>expect(f.frames[0].src).toBe(origin+'/'))
+  await vi.waitFor(()=>expect(dispose).toHaveBeenCalledTimes(1))
+  first.close()
+
+  await f.request()
+  accept=undefined
+  const second=f.socket()
+  await vi.waitFor(()=>expect(accept).toBeTypeOf('function'))
+  const secondMessages:any[]=[]
+  second.onmessage=event=>secondMessages.push(event.data)
+  accept!({protocol:'vite-hmr',dispose})
+  await vi.waitFor(()=>expect(secondMessages).toContainEqual({type:'open',protocol:'vite-hmr'}))
+  expect(dispose).toHaveBeenCalledTimes(1)
+  second.close()
+})
+
+it('awaits an owner-backed revision before deciding whether to reload',async()=>{
+  let revision=0,accept:((socket:any)=>void)|undefined
+  let releaseRevision:(value:number)=>void=()=>{}
+  let holdRevision=false,revisionRequested=false
+  const dispose=vi.fn(async()=>{})
+  const f=await fixture(async()=>html(),'/',()=>new Promise(resolve=>{accept=resolve}),{
+    revision:()=>holdRevision?new Promise<number>(resolve=>{revisionRequested=true;releaseRevision=resolve}):Promise.resolve(revision),
+  })
+  f.announce();await f.result
+  await f.request()
+  const socket=f.socket()
+  await vi.waitFor(()=>expect(accept).toBeTypeOf('function'))
+  revision=1;holdRevision=true
+  f.frames[0].src=''
+  accept!({protocol:'vite-hmr',dispose})
+  await vi.waitFor(()=>expect(revisionRequested).toBe(true))
+  expect(f.frames[0].src).not.toBe(origin+'/')
+  releaseRevision(revision)
+  await vi.waitFor(()=>expect(f.frames[0].src).toBe(origin+'/'))
+  await vi.waitFor(()=>expect(dispose).toHaveBeenCalledTimes(1))
+  socket.close()
+})
 
 describe('preview teardown',()=>{
   it('removes the app before aborting requests or disposing sockets, and closes only once',async()=>{
@@ -228,12 +299,17 @@ describe('preview initial document failures',()=>{
     expect((await f.request()).error).toContain('guest socket closed')
     await rejected
   })
-  it('reports unsupported HTML fragments without changing their body',async()=>{
+  it('preserves fragment markup and still requires the inspection handshake',async()=>{
     const fragment='<header>App</header><p>Valid HTML fragment</p>'
     const f=await fixture(async()=>new Response(fragment,{headers:{'content-type':'text/html'}}))
-    const rejected=expect(f.result).rejects.toThrow('HTML without an explicit head element is not supported')
-    expect(new TextDecoder().decode((await f.request()).body)).toBe(fragment)
-    await rejected
+    let ready=false
+    void f.result.then(()=>{ready=true})
+    expect(new TextDecoder().decode((await f.request()).body))
+      .toBe('<script src="/__sandbox/inspect.js"></script>'+fragment)
+    expect(ready).toBe(false)
+    f.announce()
+    await f.result
+    expect(ready).toBe(true)
   })
   for(const [name,response] of [
     ['JSON',()=>Response.json({value:1})],

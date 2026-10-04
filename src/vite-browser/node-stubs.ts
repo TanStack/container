@@ -6,6 +6,7 @@ export class Worker {
 export const MessageChannel = globalThis.MessageChannel
 export const performance = globalThis.performance
 export const parentPort = null
+export const isMainThread = true
 export const workerData = undefined
 export const receiveMessageOnPort = () => undefined
 export const promises = {
@@ -29,4 +30,4 @@ export const pipeline = async (...streams: unknown[]) => streams.at(-1)
 export const browserslistToTargets = () => ({})
 export const composeVisitors = (...visitors: unknown[]) => visitors
 export const Features: Record<string, number> = {}
-export default { MessageChannel, Worker, constants, exec, execFile, execSync, promises, spawn }
+export default { MessageChannel, Worker, isMainThread, parentPort, constants, exec, execFile, execSync, promises, spawn }

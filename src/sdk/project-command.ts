@@ -13,7 +13,7 @@ export interface InstallProjectCommandOptions extends ProjectInstallOptions {sig
 export interface SpawnProjectCommandOptions extends SpawnOptions {cwd?:string}
 
 const managers='(?:npm|pnpm|yarn|bun)'
-const installCommand=new RegExp(`^${managers}\\s+(?:install|i|ci)(?:\\s+(?:--(?:ignore-scripts|no-audit|no-fund|frozen-lockfile|prefer-offline|offline|silent)))*\\s*$`)
+const installCommand=new RegExp(`^${managers}\\s+(?:install|i|ci)(?:\\s+(?:--(?:ignore-scripts|no-audit|no-fund|silent)))*\\s*$`)
 const runCommand=new RegExp(`^(npm|pnpm|yarn|bun)\\s+(?:(?:run|run-script)\\s+)?([A-Za-z0-9:_-]+)(?:\\s+--)?(?:\\s+([\\s\\S]*))?$`)
 
 const shellQuote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'"

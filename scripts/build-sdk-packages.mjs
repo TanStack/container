@@ -10,12 +10,25 @@ import {buildRolldownAdapter} from './build-rolldown-parser.mjs'
 import {requiredDependencies} from '../src/sdk/compiler-assets.mjs'
 import {verifySourceSnapshot} from './source-snapshot.mjs'
 import {isAlphaSDKVersion} from './sdk-license-policy.mjs'
+import {assertNativeSDKRuntimePaths} from './native-sdk-boundary.mjs'
 
 const sourceRoot=resolve(dirname(fileURLToPath(import.meta.url)),'..')
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex')
 const json=path=>JSON.parse(readFileSync(path,'utf8'))
 const writeJSON=(path,value)=>writeFileSync(path,JSON.stringify(value,null,2)+'\n')
 function copy(source,target){mkdirSync(dirname(target),{recursive:true});cpSync(source,target,{recursive:true,errorOnExist:true,force:false})}
+function copyNativePackageFiles(source,target,externalAssets){
+  const omitted=new Set(externalAssets.map(item=>item.path.slice('runtime/native/'.length)))
+  function visit(directory,prefix=''){
+    for(const name of readdirSync(directory)){
+      const path=prefix?prefix+'/'+name:name,absolute=join(directory,name),stat=lstatSync(absolute)
+      assert.ok(!stat.isSymbolicLink(),'Native runtime source symlink: '+path)
+      if(stat.isDirectory())visit(absolute,path)
+      else if(stat.isFile()&&!omitted.has(path))copy(absolute,join(target,path))
+    }
+  }
+  visit(source)
+}
 function manifest(root){
   const files=[]
   function visit(directory){for(const name of readdirSync(directory).sort()){
@@ -30,7 +43,22 @@ function manifest(root){
 
 // Upstream compiler binaries belong to installed dependencies. Only deployment
 // setup may assemble them into browser assets, not the published packages.
+export function nativeCompilerDependencies(assets){
+  const dependencies={}
+  for(const asset of assets){
+    assert(['esbuild-wasm','@rolldown/browser'].includes(asset.package),'Unsupported native compiler package')
+    assert(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(asset.version),'Native compiler version must be exact')
+    const name=asset.dependency??asset.package
+    assert(name===asset.package||/^native-compiler-[a-z0-9-]+$/.test(name),'Unsupported native compiler dependency alias')
+    const version=name===asset.package?asset.version:`npm:${asset.package}@${asset.version}`
+    assert(dependencies[name]===undefined||dependencies[name]===version,'Conflicting native compiler dependency: '+name)
+    dependencies[name]=version
+  }
+  return dependencies
+}
+
 export function verifyCompilerPackageBoundary(core,runtime){
+  const profile=json(join(runtime,'runtime-profile.json'))
   for(const root of [core,runtime]){
     const {files}=json(join(root,'package-assets.json'))
     for(const {path} of files){
@@ -39,11 +67,16 @@ export function verifyCompilerPackageBoundary(core,runtime){
         !['esbuild.wasm','rolldown-binding.wasm32-wasi.wasm'].includes(path.split('/').at(-1)),
       'Upstream compiler assets must remain npm dependencies: '+path)
     }
+    if(profile.buildProfile==='native')assertNativeSDKRuntimePaths(files.map(file=>file.path))
   }
   const dependencies=json(join(runtime,'package.json')).dependencies
-  for(const [name,version] of Object.entries(requiredDependencies)){
+  if(profile.buildProfile==='native')assert.deepEqual(dependencies,nativeCompilerDependencies(profile.nativeRuntime.externalAssets),
+    'Native runtime dependencies must match its external asset catalog')
+  for(const [name,version] of Object.entries(profile.buildProfile==='native'?{}:requiredDependencies)){
     assert.equal(dependencies?.[name],version,'Missing pinned compiler dependency: '+name)
   }
+  for(const [name,version] of Object.entries(nativeCompilerDependencies(json(join(runtime,'runtime-profile.json')).nativeRuntime?.externalAssets??[])))
+    assert.equal(dependencies?.[name],version,'Missing pinned native compiler dependency: '+name)
 }
 
 /** Bind source-added split helpers to the archive already recorded by staging. */
@@ -93,6 +126,8 @@ export async function buildSDKPackages(staging,{sourceArchive=process.env.SDK_SO
   staging=resolve(staging)
   verifySDK(staging)
   const original=json(join(staging,'package.json')),contract=json(join(staging,'api-contract.json'))
+  const stagingManifest=json(join(staging,'manifest.json')),nativeOnly=stagingManifest.buildProfile==='native'
+  if(publicationCandidate)assert(nativeOnly,'Publication candidates require the native SDK profile')
   if(contract.apiVersion<6)throw Error('Split assets API requires SDK apiVersion 6 or later. Rebuild staging from source; do not reuse older SDK bundles.')
   if(typeof original.version!=='string'||!original.version)throw Error('Staging package needs an exact version')
   const sourceBinding=verifySDKPackageSources(staging,{sourceArchive})
@@ -115,16 +150,18 @@ export async function buildSDKPackages(staging,{sourceArchive=process.env.SDK_SO
     if(name==='rolldown-parser')continue
     if(name==='compiler'){
       for(const item of readdirSync(join(staging,'runtime/compiler')))if(item!=='esbuild.wasm')copy(join(staging,'runtime/compiler',item),join(runtime,'runtime/compiler',item))
-    }else copy(join(staging,'runtime',name),join(runtime,'runtime',name))
+    }else if(name==='native')copyNativePackageFiles(join(staging,'runtime/native'),join(runtime,'runtime/native'),json(join(staging,'manifest.json')).nativeRuntime?.externalAssets??[])
+    else copy(join(staging,'runtime',name),join(runtime,'runtime',name))
   }
   copy(join(sourceRoot,'src/sdk/package-assets.mjs'),join(core,'assets.mjs'))
-  writeFileSync(join(core,'README.md'),readFileSync(join(sourceRoot,'src/sdk/PACKAGES.md')))
+  writeFileSync(join(core,'README.md'),readFileSync(join(sourceRoot,nativeOnly?'src/sdk/NATIVE_PACKAGES.md':'src/sdk/PACKAGES.md')))
   // These hosts require split packages, so they belong here, not in staging.
-  for(const [name,files] of Object.entries({
+  for(const [name,files] of Object.entries(nativeOnly?{}:{
     basic:['README.md','package.json','index.html','client.js','server.mjs','host.mjs'],
     frameworks:['README.md','package.json','index.html','client.js','scripts.mjs','ports.mjs','server.mjs','host.mjs','projects.json'],
   }))for(const file of files)copy(join(sourceRoot,'examples','sdk-'+name,file),join(core,'examples',name,file))
-  const declarations={entry:contract.entrypoints['.'].types,assetsEntry:contract.entrypoints['./assets'].types,files:contract.declarations.map(file=>file.path)}
+  const declarations={entry:contract.entrypoints['.'].types,assetsEntry:contract.entrypoints['./assets'].types,
+    ...(contract.entrypoints['./native']?{nativeEntry:contract.entrypoints['./native'].types}:{}),files:contract.declarations.map(file=>file.path)}
   writeFileSync(join(core,declarations.assetsEntry),readFileSync(join(sourceRoot,'src/sdk/package-assets.d.ts')))
   const apiContract=buildSDKAPIContract(core,declarations,{requireCompatibility:true})
   const runtimeName='@tanstack/browser-sandbox-runtime-experimental'
@@ -135,11 +172,14 @@ export async function buildSDKPackages(staging,{sourceArchive=process.env.SDK_SO
   Object.assign(corePackage,packageFormat)
   writeJSON(join(core,'package.json'),corePackage)
   copy(join(sourceRoot,'src/sdk/runtime-package-setup.mjs'),join(runtime,'setup.mjs'))
-  copy(join(sourceRoot,'src/sdk/compiler-assets.mjs'),join(runtime,'compiler-assets.mjs'))
-  const compilerArtifact=json(join(staging,'runtime/compiler/artifact.json'))
-  const stagingManifest=json(join(staging,'manifest.json'))
-  const config={compilerArtifact}
-  const profile={buildProfile:stagingManifest.buildProfile,engines:stagingManifest.engines,experimentalCompiler:stagingManifest.experimentalCompiler}
+  copy(join(sourceRoot,'src/sdk/native-runtime-paths.mjs'),join(runtime,'native-runtime-paths.mjs'))
+  if(!nativeOnly)copy(join(sourceRoot,'src/sdk/compiler-assets.mjs'),join(runtime,'compiler-assets.mjs'))
+  const compilerArtifact=nativeOnly?undefined:json(join(staging,'runtime/compiler/artifact.json'))
+  if(publicationCandidate)assert(stagingManifest.nativeRuntime?.noticeTextCoverageComplete&&stagingManifest.nativeRuntime?.distributionReviewComplete,
+    'Publication candidate requires a reviewed native runtime')
+  const config=nativeOnly?{format:1,mode:'native'}:{compilerArtifact}
+  const profile={buildProfile:stagingManifest.buildProfile,engines:stagingManifest.engines,experimentalCompiler:stagingManifest.experimentalCompiler,
+    ...(stagingManifest.nativeRuntime?{nativeRuntime:stagingManifest.nativeRuntime}:{})}
   if(stagingManifest.experimentalRolldownParser){
     const {assets,...parser}=stagingManifest.experimentalRolldownParser
     profile.experimentalRolldownParser=parser
@@ -151,11 +191,18 @@ export async function buildSDKPackages(staging,{sourceArchive=process.env.SDK_SO
     await buildRolldownAdapter(join(runtime,'adapter'))
   }
   writeJSON(join(runtime,'compiler-config.json'),config)
-  const runtimePackage={name:runtimeName,version:original.version,type:'module',description:'Runtime assets and deployment setup for the TanStack browser sandbox.',dependencies:{...requiredDependencies},exports:{'./setup':{node:'./setup.mjs'}}}
+  const nativeDependencies=nativeCompilerDependencies(stagingManifest.nativeRuntime?.externalAssets??[])
+  const runtimePackage={name:runtimeName,version:original.version,type:'module',description:'Runtime assets and deployment setup for the TanStack browser sandbox.',dependencies:{...(nativeOnly?{}:requiredDependencies),...nativeDependencies},exports:{'./setup':{node:'./setup.mjs'}}}
   for(const key of ['license','private','publishConfig','repository','homepage','bugs'])if(original[key]!==undefined)runtimePackage[key]=original[key]
   delete runtimePackage.publishConfig
   Object.assign(runtimePackage,packageFormat)
   writeJSON(join(runtime,'package.json'),runtimePackage)
+  for(const [directory,target] of [['browser-sandbox',core],['browser-sandbox-runtime',runtime]]){
+    const changelog=join(sourceRoot,'packages',directory,'CHANGELOG.md')
+    // Version PRs create these before the source archive is made.
+    try{readFileSync(changelog)}catch(error){if(error.code==='ENOENT')continue;throw error}
+    copy(changelog,join(target,'CHANGELOG.md'))
+  }
   // Adapter bundling is asynchronous. Refuse a source tree edited after the
   // initial check instead of marking a mixed-source package verified.
   if(sourceBinding.status==='verified')assert.deepEqual(verifySDKPackageSources(staging,{sourceArchive}),sourceBinding,'Source changed during split packaging')

@@ -7,9 +7,9 @@ import {gzipSync} from 'node:zlib'
 import {createHash} from 'node:crypto'
 import {readFileSync} from 'node:fs'
 import {satisfies} from 'semver'
-import {PackageInstallCache} from '../src/npm/install'
+import {installLockedPackages,PackageInstallCache} from '../src/npm/install'
 
-afterEach(()=>vi.unstubAllGlobals())
+afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks()})
 function bundledProject(extra:Record<string,string>={},childManifest:Record<string,unknown>|null={name:'child',version:'2.0.0',bin:{child:'index.js'}}){
   const fixture=npmProject(),parent=fixture.lock.packages['node_modules/parent']
   parent.bundleDependencies=['child']
@@ -37,6 +37,17 @@ test('ordinary lockfiles retain nested versions and commit executables without s
   expect(fs.statSync('/node_modules/.bin/parent').mode&0o777).toBe(0o755)
   expect(new TextDecoder().decode(fs.readFileSync('/keep.txt'))).toBe('keep')
 })
+test('generic locked installs link declared package binaries when the filesystem supports symlinks',async()=>{
+  const fixture=npmProject(),pkg=fixture.lock.packages['node_modules/parent']
+  mockDownloads(fixture.archives)
+  const fs=new WorkspaceFiles({})
+  try{
+    await installLockedPackages(fs,{version:1,packages:[{installPath:'/node_modules/parent',version:pkg.version,
+      resolved:pkg.resolved,integrity:pkg.integrity}]})
+    expect(fs.realpathSync('/node_modules/.bin/parent')).toBe('/node_modules/parent/index.js')
+    expect(fs.statSync('/node_modules/.bin/parent').mode&0o777).toBe(0o755)
+  }finally{fs.close()}
+})
 test('executable collisions match npm by keeping the first package at a node_modules level',async()=>{
   const fixture=npmProject()
   const add=(installName:string,version:string,alias=false)=>{
@@ -60,6 +71,8 @@ test('executable collisions match npm by keeping the first package at a node_mod
   expect(fs.realpathSync('/node_modules/.bin/h3')).toBe('/node_modules/h3/bin/h3.mjs')
 })
 test('nested project installs replace only their dependency tree and commit atomically',async()=>{
+  let clock=1000
+  vi.spyOn(Date,'now').mockImplementation(()=>clock)
   const fixture=npmProject();mockDownloads(fixture.archives)
   const fs=new WorkspaceFiles({...Object.fromEntries(Object.entries(fixture.files).map(([path,value])=>['/project'+path,value])),'/node_modules/untouched/index.js':'root','/sibling/keep':'sibling'})
   expect((await installProject(fs,{cwd:'/project'})).installed).toBe(3)
@@ -68,11 +81,26 @@ test('nested project installs replace only their dependency tree and commit atom
   expect(fs.existsSync('/node_modules/untouched/index.js')).toBe(true)
   expect(fs.existsSync('/sibling/keep')).toBe(true)
   const before=fs.snapshot()
+  clock=2000
   mockDownloads(Object.fromEntries(Object.keys(fixture.archives).map(url=>[url,Buffer.from('bad archive')])))
   await expect(installProject(fs,{cwd:'/project'})).resolves.toMatchObject({installed:3})
   expect(fs.snapshot()).toEqual(before)
   await expect(installProject(fs,{cwd:'/missing'})).rejects.toThrow('ENOENT')
   fs.close()
+})
+test('failed install planning leaves live access times unchanged even when the clock advances',async()=>{
+  let clock=1000
+  vi.spyOn(Date,'now').mockImplementation(()=>clock)
+  const fixture=npmProject()
+  const lock=JSON.parse(fixture.files['/package-lock.json'] as string)
+  lock.lockfileVersion=99
+  const fs=new WorkspaceFiles({...fixture.files,'/package-lock.json':JSON.stringify(lock)})
+  try{
+    const before=fs.snapshot()
+    clock=2000
+    await expect(installProject(fs)).rejects.toThrow()
+    expect(fs.snapshot()).toEqual(before)
+  }finally{fs.close()}
 })
 test('rejects stale, incomplete, unsafe and unsupported lockfiles before downloading',()=>{
   for(const mutate of [
@@ -169,31 +197,127 @@ test('lockless direct semver dependencies resolve deterministically and retain l
   expect(requested.filter(url=>url.endsWith('.tgz'))).toHaveLength(2)
   fs.close()
 })
+test('lockless registry metadata retries transient failures but not missing packages',async()=>{
+  const metadata={versions:{'1.0.0':{name:'retryable',version:'1.0.0',dist:{
+    tarball:'https://registry.npmjs.org/retryable/-/retryable-1.0.0.tgz',integrity:'sha512-'+'A'.repeat(86)+'==',
+  }}}}
+  const fetchMetadata=vi.fn().mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    .mockResolvedValueOnce(new Response('',{status:503}))
+    .mockResolvedValueOnce(new Response(JSON.stringify(metadata)))
+  vi.stubGlobal('fetch',fetchMetadata)
+  const lock=JSON.parse(await resolveProjectLock(JSON.stringify({dependencies:{retryable:'1'}})))
+  expect(lock.packages['node_modules/retryable'].version).toBe('1.0.0')
+  expect(fetchMetadata).toHaveBeenCalledTimes(3)
+  fetchMetadata.mockReset().mockResolvedValue(new Response('',{status:404}))
+  await expect(resolveProjectLock(JSON.stringify({dependencies:{missing:'1'}}))).rejects.toThrow('missing: 404')
+  expect(fetchMetadata).toHaveBeenCalledTimes(1)
+})
 test('lockless resolver hoists shared versions, nests conflicts and installs peers',async()=>{
   const integrity='sha512-'+'A'.repeat(86)+'==',metadata:Record<string,unknown>={}
   const add=(name:string,versions:Record<string,Record<string,unknown>>)=>metadata[name]={name,versions:Object.fromEntries(Object.entries(versions).map(([version,value])=>[version,{name,version,...value,dist:{tarball:`https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`,integrity}}]))}
-  add('a',{'1.0.0':{dependencies:{shared:'^1'},optionalDependencies:{absent:'^1'}}})
+  add('a',{'1.0.0':{dependencies:{shared:'^1'},optionalDependencies:{absent:'^1',native:'^1'}}})
   add('b',{'1.0.0':{dependencies:{shared:'^2'}}})
   add('shared',{'1.5.0':{},'2.1.0':{}})
-  add('plugin',{'1.0.0':{peerDependencies:{host:'^3'}}})
+  add('plugin',{'1.0.0':{peerDependencies:{host:'^3',optionalHost:'^1'},peerDependenciesMeta:{optionalHost:{optional:true}}}})
   add('host',{'3.2.0':{}});add('absent',{})
-  vi.stubGlobal('fetch',vi.fn(async(url:string)=>new Response(JSON.stringify(metadata[Object.keys(metadata).find(name=>url.endsWith('/'+name))!] ?? {versions:{}}))))
+  add('native',{'1.0.0':{os:['darwin'],dependencies:{deep:'^1'}}})
+  const fetchMetadata=vi.fn(async(url:string)=>new Response(JSON.stringify(metadata[Object.keys(metadata).find(name=>url.endsWith('/'+name))!] ?? {versions:{}})))
+  vi.stubGlobal('fetch',fetchMetadata)
   const lock=JSON.parse(await resolveProjectLock(JSON.stringify({dependencies:{b:'1',a:'1',plugin:'1'}})))
-  expect(lock.packages['node_modules/shared'].version).toBe('1.5.0')
-  expect(lock.packages['node_modules/b/node_modules/shared'].version).toBe('2.1.0')
+  expect(lock.packages['node_modules/shared'].version).toBe('2.1.0')
+  expect(lock.packages['node_modules/a/node_modules/shared'].version).toBe('1.5.0')
   expect(lock.packages['node_modules/host'].version).toBe('3.2.0')
   expect(lock.packages['node_modules/absent']).toBeUndefined()
-  expect(Object.keys(lock.packages)).toEqual(['','node_modules/a','node_modules/shared','node_modules/b','node_modules/b/node_modules/shared','node_modules/plugin','node_modules/host'])
+  expect(lock.packages['node_modules/native']).toBeUndefined()
+  expect(fetchMetadata.mock.calls.some(([url])=>url.endsWith('/deep')||url.endsWith('/optionalHost'))).toBe(false)
+  expect(Object.keys(lock.packages)).toEqual(['','node_modules/a','node_modules/a/node_modules/shared','node_modules/b','node_modules/shared','node_modules/plugin','node_modules/host'])
 })
-test('lockless resolver rejects cycles and unsupported protocols',async()=>{
+test('lockless root placement shares newer module identities without violating older consumers or direct pins',async()=>{
+  const integrity='sha512-'+'A'.repeat(86)+'=='
+  const packages:Record<string,Record<string,Record<string,unknown>>>={
+    a:{'1.0.0':{dependencies:{shared:'~1.0.0'}}},
+    b:{'1.0.0':{dependencies:{shared:'^2'}}},
+    c:{'1.0.0':{dependencies:{shared:'^2'}}},
+    shared:{'1.0.0':{},'2.0.0':{}},
+  }
+  vi.stubGlobal('fetch',vi.fn(async(url:string)=>{
+    const name=url.split('/').pop()!
+    return new Response(JSON.stringify({name,versions:Object.fromEntries(Object.entries(packages[name]).map(([version,entry])=>
+      [version,{name,version,...entry,dist:{tarball:`https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`,integrity}}]))}))
+  }))
+  const lock=JSON.parse(await resolveProjectLock(JSON.stringify({dependencies:{a:'1',b:'1',c:'1'}})))
+  expect(lock.packages['node_modules/shared'].version).toBe('2.0.0')
+  expect(lock.packages['node_modules/a/node_modules/shared'].version).toBe('1.0.0')
+  expect(lock.packages['node_modules/b/node_modules/shared']).toBeUndefined()
+  expect(lock.packages['node_modules/c/node_modules/shared']).toBeUndefined()
+  const pinned=JSON.parse(await resolveProjectLock(JSON.stringify({dependencies:{a:'1',b:'1',c:'1',shared:'1.0.0'}})))
+  expect(pinned.packages['node_modules/shared'].version).toBe('1.0.0')
+  expect(pinned.packages['node_modules/b/node_modules/shared'].version).toBe('2.0.0')
+  expect(pinned.packages['node_modules/c/node_modules/shared'].version).toBe('2.0.0')
+})
+test('lockless resolver treats a dependency also listed as optional as optional',async()=>{
+  const integrity='sha512-'+'A'.repeat(86)+'=='
+  const metadata:Record<string,unknown>={
+    parent:{versions:{'1.0.0':{name:'parent',version:'1.0.0',dependencies:{native:'1'},optionalDependencies:{native:'1'},dist:{tarball:'https://registry.npmjs.org/parent/-/parent-1.0.0.tgz',integrity}}}},
+    native:{versions:{'1.0.0':{name:'native',version:'1.0.0',os:['aix'],cpu:['ppc64'],dist:{tarball:'https://registry.npmjs.org/native/-/native-1.0.0.tgz',integrity}}}},
+  }
+  vi.stubGlobal('fetch',vi.fn(async(url:string)=>new Response(JSON.stringify(metadata[url.endsWith('/parent')?'parent':'native']))))
+  const manifest=JSON.stringify({dependencies:{parent:'1'}})
+  const lockText=await resolveProjectLock(manifest)
+  const lock=JSON.parse(lockText)
+  expect(lock.packages['node_modules/native']).toBeUndefined()
+  expect(planProjectInstall(manifest,lockText).lock.packages.map(pkg=>pkg.name)).toEqual(['parent'])
+})
+test('lockless resolver reuses installed packages in cycles and rejects unsupported protocols',async()=>{
   const integrity='sha512-'+'A'.repeat(86)+'==',metadata:Record<string,unknown>={
     a:{versions:{'1.0.0':{name:'a',version:'1.0.0',dependencies:{b:'1'},dist:{tarball:'https://registry.npmjs.org/a/-/a-1.0.0.tgz',integrity}}}},
     b:{versions:{'1.0.0':{name:'b',version:'1.0.0',dependencies:{a:'1'},dist:{tarball:'https://registry.npmjs.org/b/-/b-1.0.0.tgz',integrity}}}},
   }
   vi.stubGlobal('fetch',vi.fn(async(url:string)=>new Response(JSON.stringify(metadata[url.endsWith('/a')?'a':'b']))))
-  await expect(resolveProjectLock(JSON.stringify({dependencies:{a:'1'}}))).rejects.toThrow('dependency cycle')
+  const cyclic=JSON.parse(await resolveProjectLock(JSON.stringify({dependencies:{a:'1'}})))
+  expect(Object.keys(cyclic.packages)).toEqual(['','node_modules/a','node_modules/b'])
   await expect(resolveProjectLock(JSON.stringify({dependencies:{parent:'latest'}}))).rejects.toThrow('dependency spec is unsupported')
   await expect(resolveProjectLock(JSON.stringify({workspaces:['packages/*']}))).rejects.toThrow('Lockless workspace installs are unsupported')
+})
+test('lockless resolver installs npm aliases under their requested names',async()=>{
+  const manifest=JSON.stringify({dependencies:{display:'npm:@scope/core@^2'}})
+  const integrity='sha512-'+'A'.repeat(86)+'=='
+  const metadata={versions:{'2.1.0':{name:'@scope/core',version:'2.1.0',dist:{
+    tarball:'https://registry.npmjs.org/@scope/core/-/core-2.1.0.tgz',integrity,
+  }}}}
+  const fetchMetadata=vi.fn(async()=>new Response(JSON.stringify(metadata)))
+  vi.stubGlobal('fetch',fetchMetadata)
+  const lockText=await resolveProjectLock(manifest)
+  const lock=JSON.parse(lockText)
+  expect(lock.packages['node_modules/display']).toMatchObject({name:'@scope/core',version:'2.1.0'})
+  expect(fetchMetadata).toHaveBeenCalledWith('https://registry.npmjs.org/@scope%2fcore',expect.anything())
+  expect(planProjectInstall(manifest,lockText).result.packageAliases).toEqual([
+    {installPath:'/node_modules/display',name:'@scope/core',version:'2.1.0'},
+  ])
+})
+test('lockless resolver declares bundled packages from their verified archive',async()=>{
+  const manifest=JSON.stringify({dependencies:{parent:'1'}})
+  const parent={name:'parent',version:'1.0.0',dependencies:{child:'1.0.0'},bundleDependencies:['child']}
+  const archive=gzipSync(tarArchive({
+    'package/package.json':JSON.stringify(parent),
+    'package/node_modules/child/package.json':JSON.stringify({name:'child',version:'1.0.0'}),
+    'package/node_modules/child/index.js':'module.exports=1',
+  }))
+  const tarball='https://registry.npmjs.org/parent/-/parent-1.0.0.tgz'
+  const integrity='sha512-'+createHash('sha512').update(archive).digest('base64')
+  vi.stubGlobal('fetch',vi.fn(async(url:string)=>url.endsWith('/parent')?
+    new Response(JSON.stringify({versions:{'1.0.0':{...parent,dist:{tarball,integrity}}}})):
+    new Response(Uint8Array.from(archive))))
+  const lockText=await resolveProjectLock(manifest)
+  const lock=JSON.parse(lockText)
+  expect(lock.packages['node_modules/parent/node_modules/child']).toMatchObject({name:'child',version:'1.0.0',inBundle:true})
+  const planned=planProjectInstall(manifest,lockText)
+  expect(planned.lock.packages).toHaveLength(1)
+  expect(planned.lock.packages[0].bundledPackages).toEqual([{installPath:'/node_modules/parent/node_modules/child',name:'child',version:'1.0.0'}])
+  const fs=new WorkspaceFiles({'/package.json':manifest})
+  expect(await installProject(fs)).toMatchObject({installed:2})
+  expect(fs.existsSync('/node_modules/parent/node_modules/child/index.js')).toBe(true)
+  fs.close()
 })
 test('lockless transitive archives install duplicate versions in dependency lifecycle order',async()=>{
   const manifest={name:'graph',version:'1.0.0',dependencies:{a:'1',b:'1'}},archives:Record<string,Buffer>={},metadata:Record<string,unknown>={}
@@ -220,8 +344,8 @@ test('lockless transitive archives install duplicate versions in dependency life
   expect(await installProject(fs,{},undefined,async task=>{seen.push(task.script)})).toMatchObject({installed:4})
   expect(seen.indexOf('shared-one')).toBeLessThan(seen.indexOf('a-install'))
   expect(seen.indexOf('shared-two')).toBeLessThan(seen.indexOf('b-install'))
-  expect(JSON.parse(new TextDecoder().decode(fs.readFileSync('/node_modules/shared/package.json'))).version).toBe('1.5.0')
-  expect(JSON.parse(new TextDecoder().decode(fs.readFileSync('/node_modules/b/node_modules/shared/package.json'))).version).toBe('2.1.0')
+  expect(JSON.parse(new TextDecoder().decode(fs.readFileSync('/node_modules/shared/package.json'))).version).toBe('2.1.0')
+  expect(JSON.parse(new TextDecoder().decode(fs.readFileSync('/node_modules/a/node_modules/shared/package.json'))).version).toBe('1.5.0')
   fs.close()
 })
 test('verified archive cache recovers an aborted install while offline',async()=>{
@@ -241,6 +365,13 @@ test('verified archive cache recovers an aborted install while offline',async()=
   expect(files.existsSync('/node_modules/child/index.js')).toBe(true)
   expect(fetch).not.toHaveBeenCalled()
   files.close()
+})
+test('default archive cache retains dependency graphs larger than 128 entries',async()=>{
+  const cache=new PackageInstallCache(),load=vi.fn(async()=>new Uint8Array([1]))
+  for(let i=0;i<130;i++)await cache.archive('test-package-'+i,load)
+  expect(load).toHaveBeenCalledTimes(130)
+  for(let i=0;i<130;i++)await cache.archive('test-package-'+i,load)
+  expect(load).toHaveBeenCalledTimes(130)
 })
 test('package cache applies deterministic LRU entry and byte eviction',async()=>{
   const cache=new PackageInstallCache({archiveBytes:4,archiveEntries:2,metadataBytes:4,metadataEntries:2})

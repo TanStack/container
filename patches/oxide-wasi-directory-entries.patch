@@ -1,0 +1,55 @@
+--- a/crates/ignore/src/walk.rs
++++ b/crates/ignore/src/walk.rs
+@@ -380,14 +380,27 @@
+         })
+     }
+ 
+-    // Placeholder implementation to allow compiling on non-standard platforms
+-    // (e.g. wasm32).
+-    #[cfg(not(any(windows, unix)))]
++    #[cfg(target_os = "wasi")]
+     fn from_entry_os(
+         depth: usize,
+         ent: &fs::DirEntry,
+         ty: fs::FileType,
+     ) -> Result<DirEntryRaw, Error> {
++        Ok(DirEntryRaw {
++            path: ent.path(),
++            ty,
++            follow_link: false,
++            depth,
++        })
++    }
++
++    // Other targets without a filesystem still cannot walk directory entries.
++    #[cfg(not(any(windows, unix, target_os = "wasi")))]
++    fn from_entry_os(
++        depth: usize,
++        ent: &fs::DirEntry,
++        ty: fs::FileType,
++    ) -> Result<DirEntryRaw, Error> {
+         Err(Error::Io(io::Error::new(
+             io::ErrorKind::Other,
+             "unsupported platform",
+@@ -420,9 +433,18 @@
+         })
+     }
+ 
+-    // Placeholder implementation to allow compiling on non-standard platforms
+-    // (e.g. wasm32).
+-    #[cfg(not(any(windows, unix)))]
++    #[cfg(target_os = "wasi")]
++    fn from_path(depth: usize, pb: PathBuf, link: bool) -> Result<DirEntryRaw, Error> {
++        let md = fs::metadata(&pb).map_err(|err| Error::Io(err).with_path(&pb))?;
++        Ok(DirEntryRaw {
++            path: pb,
++            ty: md.file_type(),
++            follow_link: link,
++            depth,
++        })
++    }
++
++    #[cfg(not(any(windows, unix, target_os = "wasi")))]
+     fn from_path(depth: usize, pb: PathBuf, link: bool) -> Result<DirEntryRaw, Error> {
+         Err(Error::Io(io::Error::new(
+             io::ErrorKind::Other,

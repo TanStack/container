@@ -1,0 +1,9 @@
+{
+  "mode": "pre",
+  "tag": "alpha",
+  "initialVersions": {
+    "@tanstack/browser-sandbox-experimental": "0.1.0-alpha.0",
+    "@tanstack/browser-sandbox-runtime-experimental": "0.1.0-alpha.0"
+  },
+  "changesets": []
+}

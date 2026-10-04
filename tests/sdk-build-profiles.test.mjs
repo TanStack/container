@@ -13,9 +13,10 @@ const batchedInterpreter = segmentedInterpreter+'-batched'
 const nativeUTF8 = batchedInterpreter+'-native-utf8'
 const nativeUTF8Buffer = nativeUTF8+'-buffer'
 const guestSampling = nativeUTF8+'-guest-sampling'
+const nativeUTF8BufferSampling = nativeUTF8Buffer+'-guest-sampling'
 function fixture(profile = 'default', change = () => {}) {
   const selectedProfile=profile
-  if([segmentedInterpreter,batchedInterpreter,nativeUTF8,nativeUTF8Buffer,guestSampling].includes(profile))profile=desktopAlpha
+  if([segmentedInterpreter,batchedInterpreter,nativeUTF8,nativeUTF8Buffer,guestSampling,nativeUTF8BufferSampling].includes(profile))profile=desktopAlpha
   const root = mkdtempSync(join(tmpdir(), 'sdk-profile-test-'))
   for (const [slot, source] of Object.entries(sdkEngineDirectories(selectedProfile))) {
     const directory = join(root, source); mkdirSync(directory)
@@ -40,14 +41,14 @@ function fixture(profile = 'default', change = () => {}) {
       if(profile.includes('-iterative-calls')){metadata.interpreterFrames={limit:4096,stageSHA256:'f'.repeat(64)};metadata.guestCallDepth={limit:192,nativeReentryLimit:64}}
       if(profile.includes('-module-import-exports'))metadata.moduleImportExports={stageSHA256:'d'.repeat(64)}
     }
-    if([segmentedInterpreter,batchedInterpreter,nativeUTF8,nativeUTF8Buffer,guestSampling].includes(selectedProfile)&&slot==='quickjs-als-asyncify-wasm-atomics-fibers-shared-storage'){
+    if([segmentedInterpreter,batchedInterpreter,nativeUTF8,nativeUTF8Buffer,guestSampling,nativeUTF8BufferSampling].includes(selectedProfile)&&slot==='quickjs-als-asyncify-wasm-atomics-fibers-shared-storage'){
       metadata.interpreterMachine={stageSHA256:'a'.repeat(64),scope:'ordinary opcode families with coordinator-owned entry, calls, yields and unwind'}
       metadata.binaryenOneCallerInlineMax=50
       metadata.noInline=false
-      if([batchedInterpreter,nativeUTF8,nativeUTF8Buffer,guestSampling].includes(selectedProfile))Object.assign(metadata.interpreterMachine,{variant:'persistent-state-family-runs',baseStageSHA256:'b'.repeat(64)})
-      if([nativeUTF8,nativeUTF8Buffer,guestSampling].includes(selectedProfile))metadata.nativeUTF8={stageSHA256:'c'.repeat(64),bindingSHA256:'d'.repeat(64),intrinsic:'__qjsEncodeUTF8',operations:['encodeUTF8'],input:'string',output:'ArrayBuffer',allocation:'QuickJS runtime allocator, fresh guest-owned bytes',loneSurrogates:'U+FFFD',interruptPollCodeUnits:65536,maxOutputBytes:2147483647}
-      if(selectedProfile===guestSampling)metadata.guestSampling={experimental:true,maxSamples:512,intervalMs:20,functionBytes:96,filenameBytes:192,retention:'latest512',storage:'runtime-owned host allocation outside guest heap quota',maxStorageBytes:172064,stageSHA256:'e'.repeat(64),bindingSHA256:'f'.repeat(64)}
-      if(selectedProfile===nativeUTF8Buffer)metadata.nativeUTF8Buffer={experimental:true,stageSHA256:'e'.repeat(64),bindingSHA256:'f'.repeat(64),intrinsics:['__qjsUTF8ByteLength','__qjsWriteUTF8'],operations:['utf8ByteLength','writeUTF8'],input:'string',target:'Uint8Array',ranges:'strict view-relative integer offset and limit',loneSurrogates:'U+FFFD',partialCodePoints:false,interruptPollCodeUnits:65536,encodedOutputAllocation:false}
+      if([batchedInterpreter,nativeUTF8,nativeUTF8Buffer,guestSampling,nativeUTF8BufferSampling].includes(selectedProfile))Object.assign(metadata.interpreterMachine,{variant:'persistent-state-family-runs',baseStageSHA256:'b'.repeat(64)})
+      if([nativeUTF8,nativeUTF8Buffer,guestSampling,nativeUTF8BufferSampling].includes(selectedProfile))metadata.nativeUTF8={stageSHA256:'c'.repeat(64),bindingSHA256:'d'.repeat(64),intrinsic:'__qjsEncodeUTF8',operations:['encodeUTF8'],input:'string',output:'ArrayBuffer',allocation:'QuickJS runtime allocator, fresh guest-owned bytes',loneSurrogates:'U+FFFD',interruptPollCodeUnits:65536,maxOutputBytes:2147483647}
+      if([guestSampling,nativeUTF8BufferSampling].includes(selectedProfile))metadata.guestSampling={experimental:true,maxSamples:512,intervalMs:20,functionBytes:96,filenameBytes:192,retention:'latest512',storage:'runtime-owned host allocation outside guest heap quota',maxStorageBytes:172064,stageSHA256:'e'.repeat(64),bindingSHA256:'f'.repeat(64)}
+      if([nativeUTF8Buffer,nativeUTF8BufferSampling].includes(selectedProfile))metadata.nativeUTF8Buffer={experimental:true,stageSHA256:'e'.repeat(64),bindingSHA256:'f'.repeat(64),intrinsics:['__qjsUTF8ByteLength','__qjsWriteUTF8'],operations:['utf8ByteLength','writeUTF8'],input:'string',target:'Uint8Array',ranges:'strict view-relative integer offset and limit',loneSurrogates:'U+FFFD',partialCodePoints:false,interruptPollCodeUnits:65536,encodedOutputAllocation:false}
     }
     change(metadata, slot)
     writeFileSync(join(directory, 'build.json'), JSON.stringify(metadata))
@@ -143,6 +144,27 @@ test('native UTF-8 buffer profile requires its exact primitive contract',()=>{
   for(const change of [m=>delete m.nativeUTF8Buffer,m=>m.nativeUTF8Buffer.extra=true])assert.throws(()=>inspectSDKBuildProfile(fixture(nativeUTF8Buffer,(m,key)=>{if(key===slot)change(m)}),nativeUTF8Buffer),/native UTF-8 buffer provenance or limits/)
   for(const key of Object.keys(sdkEngineDirectories(nativeUTF8Buffer)).filter(key=>key!==slot))assert.throws(()=>inspectSDKBuildProfile(fixture(nativeUTF8Buffer,(m,current)=>{if(current===key)m.nativeUTF8Buffer={}}),nativeUTF8Buffer),/unexpected native UTF-8 buffer metadata/)
   for(const field of ['nativeUTF8','interpreterMachine','moduleImportExports','assignmentParser','compiledInitializers','interpreterFrames'])assert.throws(()=>inspectSDKBuildProfile(fixture(nativeUTF8Buffer,(m,key)=>{if(key===slot)delete m[field]}),nativeUTF8Buffer))
+})
+
+test('buffer sampling diagnostic preserves the buffer profile and validates both features',()=>{
+  const slot='quickjs-als-asyncify-wasm-atomics-fibers-shared-storage'
+  const baseline=sdkEngineDirectories(nativeUTF8Buffer),mapping=sdkEngineDirectories(nativeUTF8BufferSampling)
+  assert.deepEqual(Object.keys(mapping),Object.keys(baseline))
+  for(const key of Object.keys(mapping))assert.equal(mapping[key],baseline[key]+(key===slot?'-guest-sampling':''))
+  const engines=inspectSDKBuildProfile(fixture(nativeUTF8BufferSampling),nativeUTF8BufferSampling)
+  for(const key of Object.keys(mapping))assert.equal(engines[key].sourceDirectory,mapping[key])
+  for(const field of ['nativeUTF8Buffer','guestSampling','nativeUTF8','interpreterMachine','moduleImportExports','assignmentParser','compiledInitializers','interpreterFrames']){
+    assert.throws(()=>inspectSDKBuildProfile(fixture(nativeUTF8BufferSampling,(m,key)=>{if(key===slot)delete m[field]}),nativeUTF8BufferSampling))
+  }
+  for(const [field,change,pattern] of [
+    ['nativeUTF8Buffer',m=>m.partialCodePoints=true,/native UTF-8 buffer provenance or limits/],
+    ['nativeUTF8Buffer',m=>m.bindingSHA256='BAD',/native UTF-8 buffer provenance or limits/],
+    ['guestSampling',m=>m.maxSamples=513,/guest sampling provenance or limits/],
+    ['guestSampling',m=>m.stageSHA256='BAD',/guest sampling provenance or limits/],
+  ])assert.throws(()=>inspectSDKBuildProfile(fixture(nativeUTF8BufferSampling,(m,key)=>{if(key===slot)change(m[field])}),nativeUTF8BufferSampling),pattern)
+  for(const key of Object.keys(mapping).filter(key=>key!==slot))for(const field of ['nativeUTF8Buffer','guestSampling']){
+    assert.throws(()=>inspectSDKBuildProfile(fixture(nativeUTF8BufferSampling,(m,current)=>{if(current===key)m[field]={}}),nativeUTF8BufferSampling),/unexpected/)
+  }
 })
 
 test('guest sampling diagnostic changes only the native UTF-8 fiber WASM source',()=>{

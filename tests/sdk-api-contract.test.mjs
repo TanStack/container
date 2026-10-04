@@ -7,15 +7,17 @@ import {buildSDKAPIContract} from '../scripts/sdk-api-contract.mjs'
 import {compareSDKAPIContracts} from '../scripts/sdk-api-compare.mjs'
 import {buildSDKTypes} from '../scripts/build-sdk-types.mjs'
 
-test('source API 6 has distinct internal staging and public split asset contracts',()=>{
-  const root=mkdtempSync(join(tmpdir(),'sdk-api-six-')),declarations=buildSDKTypes(root)
+test('source API 8 has distinct internal staging and public split asset contracts',()=>{
+  const root=mkdtempSync(join(tmpdir(),'sdk-api-eight-')),declarations=buildSDKTypes(root,{native:true})
   const staging=buildSDKAPIContract(root,declarations,{requireCompatibility:true,internalStaging:true})
-  assert.equal(staging.apiVersion,6)
+  assert.equal(staging.apiVersion,8)
+  assert.ok(staging.exports['./native'].includes('AgentSession'))
+  assert.equal(staging.exports['./native'].includes('WorkerKernel'),false)
   assert.equal(JSON.parse(readFileSync(join(root,staging.path))).scope,'internal-staging')
   assert.ok(staging.exports['./assets'].includes('copyRuntimeAssets'))
   writeFileSync(join(root,declarations.assetsEntry),readFileSync('src/sdk/package-assets.d.ts'))
   const split=buildSDKAPIContract(root,declarations,{requireCompatibility:true})
-  assert.equal(split.apiVersion,6)
+  assert.equal(split.apiVersion,8)
   assert.equal(JSON.parse(readFileSync(join(root,split.path))).scope,undefined)
   assert.ok(split.exports['./assets'].includes('prepareRuntimeAssets'))
   assert.ok(split.exports['./assets'].includes('PreviewHostHostingContract'))

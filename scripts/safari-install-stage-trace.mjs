@@ -30,7 +30,7 @@ export function installSafariInstallStageTrace(){
   wrapPromise(self.ReadableStreamDefaultReader?.prototype,'read','stream-read')
   wrapPromise(self.ReadableStreamBYOBReader?.prototype,'read','stream-read')
   wrapPromise(self.crypto?.subtle,'digest','integrity')
-  const phaseStages=new Set(['install-planning','workspace-staging','tar-extraction','package-file-write','workspace-commit'])
+  const phaseStages=new Set(['install-planning','workspace-staging','tar-extraction','package-file-write','workspace-commit','archive-download','archive-cache-read','archive-cache-write','gzip-decompression'])
   const phases=new Map()
   self.__sandboxInstallPhaseTrace=(stage,state,id)=>{
     if(!phaseStages.has(stage))return

@@ -1,10 +1,10 @@
-import {lstat,readdir,readFile} from 'node:fs/promises'
+import {lstat,readdir,readFile,realpath} from 'node:fs/promises'
 import path from 'node:path'
 
 // Preserve npm's installed nesting. Copy complete package contents because
 // compilers and frameworks load files that no static import graph can discover.
 export async function collectInstalledClosure(root,seeds){
-  const files={},packages=[],missingOptional=[]
+  const files={},packages=[],missingOptional=[],links={}
   const visited=new Set()
   const resolvePackage=async(name,from)=>{
     for(let directory=from;directory===root||directory.startsWith(root+path.sep);directory=path.dirname(directory)){
@@ -39,7 +39,17 @@ export async function collectInstalledClosure(root,seeds){
       Object.hasOwn(manifest.optionalDependencies??{},dependency)||Boolean(manifest.peerDependenciesMeta?.[dependency]?.optional))
   }
   for(const seed of seeds)await visit(seed,root)
-  return {files,preparation:{kind:'installed-dependency-closure',packages:packages.sort((a,b)=>a.path.localeCompare(b.path,'en')),missingOptional,
+  const binDirectory=path.join(root,'node_modules/.bin')
+  for(const entry of await readdir(binDirectory,{withFileTypes:true})){
+    if(!entry.isSymbolicLink())continue
+    const source=path.join(binDirectory,entry.name)
+    const target=await realpath(source)
+    if(!target.startsWith(root+path.sep))throw Error('Installed package executable leaves the fixture: '+source)
+    const relativeTarget='/'+path.relative(root,target).split(path.sep).join('/')
+    if(!Object.hasOwn(files,relativeTarget))continue
+    links['/node_modules/.bin/'+entry.name]=relativeTarget
+  }
+  return {files,links,preparation:{kind:'installed-dependency-closure',packages:packages.sort((a,b)=>a.path.localeCompare(b.path,'en')),missingOptional,
     nativeAssets:Object.keys(files).filter(file=>file.endsWith('.node')).sort(),
     scope:'Complete locally installed package files, including metadata and binary assets. No browser package installation or native addon execution is implied.'}}
 }

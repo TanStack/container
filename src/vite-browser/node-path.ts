@@ -12,7 +12,8 @@ export const parse = path.parse
 export const relative = path.relative
 export const resolve = path.resolve
 export const sep = '/'
-export const posix = path.posix ?? path
+export const toNamespacedPath = (filename:string) => filename
+export const posix = { ...(path.posix ?? path), toNamespacedPath }
 export const win32 = { ...path, delimiter: ';', sep: '\\' }
 
-export default { ...path, delimiter, posix, sep, win32 }
+export default { ...path, delimiter, posix, sep, win32, toNamespacedPath }

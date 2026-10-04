@@ -39,7 +39,7 @@ export class HostedKernel {
     const ownerOrigin=document.location.origin
     if(ownerOrigin==='null')throw Error('HostedKernel requires a non-opaque owner origin')
     const url=new URL(options.hostURL,document.baseURI)
-    const loopback=url.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(url.hostname)
+    const loopback=url.protocol==='http:'&&(['localhost','127.0.0.1','[::1]'].includes(url.hostname)||url.hostname.endsWith('.localhost'))
     if(url.protocol!=='https:'&&!loopback)throw Error('HostedKernel hostURL must use HTTPS or loopback HTTP')
     if(url.origin===ownerOrigin)throw Error('HostedKernel requires a dedicated cross-origin host')
     if(url.username||url.password||url.hash)throw Error('HostedKernel hostURL cannot contain credentials or a fragment')

@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs'
 import {runInNewContext} from 'node:vm'
 import {describe,it,expect,vi} from 'vitest'
 
-function serviceWorker(response?:{status:number;headers:[string,string][];body:ArrayBuffer}|Error){
+function serviceWorker(response?:{status:number;headers:[string,string][];body:ArrayBuffer}|Error|((port:MessagePort)=>void)){
   const listeners=new Map<string,(event:any)=>void>(),cancelled:any[]=[]
   const channels:MessageChannel[]=[],signals:AbortSignal[]=[]
   let workspaceClients:{id:string;url:string}[]=[]
@@ -12,7 +12,8 @@ function serviceWorker(response?:{status:number;headers:[string,string][];body:A
     if(response instanceof Error)throw response
     const port=_transfer[0]
     port.onmessage=event=>cancelled.push(event.data)
-    if(response)port.postMessage(response,[response.body])
+    if(typeof response==='function')response(port)
+    else if(response)port.postMessage(response,[response.body])
   }}
   const self:any={
     location:{origin:'https://preview.invalid'},
@@ -21,7 +22,7 @@ function serviceWorker(response?:{status:number;headers:[string,string][];body:A
     addEventListener:(type:string,listener:(event:any)=>void)=>listeners.set(type,listener),
   }
   runInNewContext(readFileSync('preview-host/sw.js','utf8'),{
-    URL,Headers,Response,MessageChannel:class {
+    URL,Headers,Response,ReadableStream,MessageChannel:class {
       constructor(){
         const channel=new MessageChannel()
         vi.spyOn(channel.port1,'close')
@@ -57,6 +58,27 @@ function expectAbortListenerRemoved(worker:ReturnType<typeof serviceWorker>){
 }
 
 describe('preview service worker request cancellation',()=>{
+  it('delivers response chunks before the owner completes the stream',async()=>{
+    let ownerPort!:MessagePort
+    const worker=serviceWorker(port=>{
+      ownerPort=port
+      port.postMessage({status:200,headers:[['content-type','text/plain']],stream:true})
+    }),controller=new AbortController()
+    const response=await dispatch(worker,controller)
+    expect(response.status).toBe(200)
+    const reader=response.body!.getReader()
+    const first=reader.read()
+    await vi.waitFor(()=>expect(worker.cancelled).toContainEqual({type:'pull'}))
+    ownerPort.postMessage({type:'chunk',body:new TextEncoder().encode('first').buffer})
+    expect(new TextDecoder().decode((await first).value)).toBe('first')
+    expect(worker.channels[0].port1.close).not.toHaveBeenCalled()
+    const second=reader.read()
+    ownerPort.postMessage({type:'chunk',body:new TextEncoder().encode('second').buffer})
+    expect(new TextDecoder().decode((await second).value)).toBe('second')
+    ownerPort.postMessage({type:'done'})
+    expect((await reader.read()).done).toBe(true)
+    expectAbortListenerRemoved(worker)
+  })
   it('forwards browser request cancellation to the owner exactly once',async()=>{
     const worker=serviceWorker(),controller=new AbortController(),response=dispatch(worker,controller)
     await vi.waitFor(()=>expect(worker.posted).toBe(true))

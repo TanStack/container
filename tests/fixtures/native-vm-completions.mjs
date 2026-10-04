@@ -1,0 +1,41 @@
+export const nestedVMCompletionSources=['42','{42}','if(true)42','while(false)42','try{42}finally{7}'].flatMap(body=>[
+  `if(true){${body}}else 9`,
+  `outer:for(let n=0;n<1;n++){${body};break outer}`,
+  `try{${body}}finally{7}`,
+  `try{throw 7}catch(e){${body}}`,
+])
+
+export const vmCompletionSources=[
+  '', ';', '42', '1;2;3', '1;var owned', 'var owned=42', 'let owned=42',
+  '1;let owned=42', '1;const owned=42', '1;function owned(){}', '1;class Owned{}',
+  '1;{}', '{1;2}', '1;{var owned}',
+  '1;if(false)2', '1;if(true){}', 'if(true)42;else 7', 'if(false)7;else 42',
+  'if(true){1;if(false)2}',
+  '1;while(false)2', 'let owned=0;while(owned++<3){owned}',
+  'while(true){42;break}', 'while(true){42;if(true)break}',
+  'let owned=0;while(owned++<3){owned;continue}',
+  '1;do{}while(false)', 'do{42}while(false)',
+  '1;for(let owned=0;owned<0;owned++)2', 'for(let owned=0;owned<3;owned++){owned}',
+  'for(const owned of [1,2,3]){owned}', '1;for(const owned of []){owned}',
+  'for(const owned in {a:1,b:2}){owned}',
+  '1;switch(0){}', 'switch(1){case 1:42;break;default:7}',
+  'switch(1){case 1:42;case 2:43;break}',
+  'outer:{42;break outer}', 'outer:{42;if(true)break outer}',
+  'outer:for(let owned=0;owned<3;owned++){owned;if(owned===1)break outer}',
+  '1;try{}finally{}', 'try{42}finally{7}', 'try{throw 7}catch(owned){owned}',
+  'try{42;throw 7}catch(owned){}', 'try{throw 7}catch(owned){42}finally{1}',
+  'outer:{try{42}finally{7;break outer}}',
+  'try{try{throw 7}finally{1}}catch(owned){owned}',
+  'try{try{42}finally{1;throw 7}}catch(owned){owned}',
+  '({answer:42})', '[1,2,3]', '42n', 'void 0',
+  '(function(){return eval("1;2")})()',
+  'let owned=42;(function(){return owned})()',
+  'let globalThis=7;globalThis', 'let Symbol=7;Symbol',
+]
+
+export const vmCompletionControlSources=[...vmCompletionSources,
+  '"use strict"','"use strict";var owned',
+  '1;label:{}','1;with({}){}',
+  'outer:for(let owned=0;owned<2;owned++){try{owned}finally{if(owned===0)continue outer}}',
+  'let channel=42;channel','const url=42;url',
+]

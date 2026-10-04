@@ -358,6 +358,8 @@ try {
   report.result = 'passed'
 } catch (error) {
   report.error = String(error)
+  report.diagnostics.sdkFailure = await page.evaluate(() => window.__tanstackSDKFailureDiagnostics ?? null)
+    .catch(error => ({ captureError: String(error) }))
   report.diagnostics.ownerText = (await page.locator('body').innerText().catch(() => '')).slice(-64_000)
   if (state.preview) {
     report.diagnostics.previewUrl = state.preview.url()

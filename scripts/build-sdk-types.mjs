@@ -3,7 +3,10 @@ import {mkdirSync,writeFileSync,readFileSync} from 'node:fs'
 import {resolve,dirname,relative} from 'node:path'
 
 /** Emit source-derived declarations, shipping only the reachable declaration graph. */
-export function buildSDKTypes(out){
+export function buildSDKTypes(out,{entry='src/sdk/index.ts',native=false}={}){
+  if(!['src/sdk/index.ts','src/sdk/native.ts'].includes(entry))throw Error('Unknown SDK declaration entry: '+entry)
+  const declarationEntry='./types/'+entry.slice('src/'.length).replace(/\.ts$/,'.d.ts')
+  const nativeEntry='./types/sdk/native.d.ts'
   const root=resolve('src'),emitted=new Map()
   const config=ts.readConfigFile('tsconfig.json',ts.sys.readFile)
   if(config.error)throw Error(ts.flattenDiagnosticMessageText(config.error.messageText,'\n'))
@@ -11,13 +14,13 @@ export function buildSDKTypes(out){
     declaration:true,emitDeclarationOnly:true,noEmit:false,declarationMap:false,
     rootDir:root,outDir:resolve(out,'types'),
   })
-  const program=ts.createProgram([resolve('src/sdk/index.ts'),...parsed.fileNames.filter(file=>file.endsWith('.d.ts'))],parsed.options)
+  const program=ts.createProgram([resolve(entry),...(native?[resolve('src/sdk/native.ts')]:[]),...parsed.fileNames.filter(file=>file.endsWith('.d.ts'))],parsed.options)
   const result=program.emit(undefined,(file,text)=>emitted.set(resolve(file),text))
   const diagnostics=[...ts.getPreEmitDiagnostics(program),...result.diagnostics]
   if(diagnostics.length)throw Error(ts.formatDiagnosticsWithColorAndContext(diagnostics,{
     getCanonicalFileName:file=>file,getCurrentDirectory:()=>process.cwd(),getNewLine:()=> '\n',
   }))
-  const pending=[resolve(out,'types/sdk/index.d.ts')],visited=new Set()
+  const pending=[resolve(out,declarationEntry),...(native?[resolve(out,nativeEntry)]:[])],visited=new Set()
   while(pending.length){
     const file=pending.pop();if(visited.has(file))continue
     const text=emitted.get(file)
@@ -31,10 +34,14 @@ export function buildSDKTypes(out){
       if(specifier&&ts.isStringLiteral(specifier)){
         const value=specifier.text
         if(!value.startsWith('.')||value.includes('?'))throw Error('External SDK declaration dependency: '+value+' in '+file)
-        const target=resolve(dirname(file),value.replace(/\.js$/,'')+'.d.ts')
+        const direct=resolve(dirname(file),value.replace(/\.js$/,'')+'.d.ts')
+        const directory=resolve(dirname(file),value.replace(/\.js$/,''),'index.d.ts')
+        const target=emitted.has(direct)?direct:emitted.has(directory)?directory:direct
         if(!target.startsWith(resolve(out,'types')+'/'))throw Error('SDK declaration escapes package: '+target)
         pending.push(target)
-        replacements.push([specifier.getStart(source)+1,specifier.getEnd()-1,value.replace(/\.js$/,'')+'.js'])
+        let rewrittenTarget=relative(dirname(file),target).replace(/\.d\.ts$/,'.js')
+        if(!rewrittenTarget.startsWith('.'))rewrittenTarget='./'+rewrittenTarget
+        replacements.push([specifier.getStart(source)+1,specifier.getEnd()-1,rewrittenTarget])
       }
       ts.forEachChild(node,walk)
     }
@@ -46,5 +53,5 @@ export function buildSDKTypes(out){
   const assetsFile=resolve(out,'types/sdk/assets.d.ts')
   writeFileSync(assetsFile,readFileSync('src/sdk/assets.d.ts'))
   visited.add(assetsFile)
-  return {entry:'./types/sdk/index.d.ts',assetsEntry:'./types/sdk/assets.d.ts',files:[...visited].map(file=>relative(out,file)).sort()}
+  return {entry:declarationEntry,...(native?{nativeEntry}:{}),assetsEntry:'./types/sdk/assets.d.ts',files:[...visited].map(file=>relative(out,file)).sort()}
 }

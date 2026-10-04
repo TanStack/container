@@ -7,7 +7,7 @@ let kernel:WorkerKernel|undefined
 async function run(){
   try{
     result.checks.compatibility=SDK_COMPATIBILITY
-    if(SDK_COMPATIBILITY.apiVersion!==6||SDK_COMPATIBILITY.stability!=='experimental')throw Error('SDK compatibility contract mismatch')
+    if(SDK_COMPATIBILITY.apiVersion!==8||SDK_COMPATIBILITY.stability!=='experimental')throw Error('SDK compatibility contract mismatch')
     kernel=new WorkerKernel({
       '/project/package.json':'{}',
       '/input.txt':'rebundled SDK',

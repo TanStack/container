@@ -1,41 +1,11 @@
-import rollupWasmBytes from '@rollup/wasm-node/dist/wasm-node/bindings_wasm_bg.wasm'
-import { Buffer } from 'buffer'
 import * as esbuild from 'esbuild-wasm'
-import process from 'process/browser'
 import { readVolume, resetVolume } from './node-fs'
-
-// This browser worker installs partial shims, not Node's complete global types.
-const globals = globalThis as unknown as {
-  Buffer: typeof Buffer
-  process: typeof process
-  global: typeof globalThis
-  __rollupWasmBytes: Uint8Array
-}
-globals.Buffer = Buffer
-globals.process = process
-globals.global = globalThis
-globals.__rollupWasmBytes = rollupWasmBytes
-const bufferToString = Buffer.prototype.toString
-Buffer.prototype.toString = function (encoding?: BufferEncoding, start?: number, end?: number) {
-  if (encoding === 'base64url') {
-    return bufferToString.call(this, 'base64', start, end)
-      .replaceAll('+', '-')
-      .replaceAll('/', '_')
-      .replace(/=+$/, '')
-  }
-  return bufferToString.call(this, encoding, start, end)
-}
-process.cwd = () => '/app'
-process.chdir = () => {}
-process.env.NODE_ENV = 'production'
-process.versions.node = '22.0.0'
-const outputStream = { isTTY: false, columns: 80, getColorDepth: () => 1 }
-;(process as typeof process & { stdout: typeof outputStream; stderr: typeof outputStream }).stdout = outputStream
-;(process as typeof process & { stdout: typeof outputStream; stderr: typeof outputStream }).stderr = outputStream
+export {network,virtualListeningPorts,connectVirtual} from './runtime-host'
+import './runtime-host'
 
 // The toolchain already has a dedicated worker. Keep its compiler service in
 // the same lifetime so completion cannot leave a nested service running.
-await esbuild.initialize({ wasmURL: '/vite-runtime/esbuild.wasm', worker: false })
+await esbuild.initialize({ wasmURL: new URL('./esbuild.wasm',import.meta.url).href, worker: false })
 
 function resetBrowserVolume(files: Record<string, string | Uint8Array>) {
   resetVolume({

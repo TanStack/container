@@ -120,6 +120,9 @@ async function route(event) {
     const result = await new Promise((resolve, reject) => {
       const channel = new MessageChannel()
       let settled = false
+      let streaming = false
+      let streamController
+      let bytes = 0
       let timer
       let releaseClientRequest = () => {}
       const finish = (error, value) => {
@@ -129,23 +132,43 @@ async function route(event) {
         releaseClientRequest()
         request.signal.removeEventListener('abort', abort)
         channel.port1.close()
-        if (error) reject(error)
+        if (error) {
+          if(streaming){try{streamController.error(error)}catch{}}
+          else reject(error)
+        }
         else resolve(value)
       }
       const cancel = (error) => {
         if (settled) return
-        settled = true
-        clearTimeout(timer)
-        releaseClientRequest()
-        request.signal.removeEventListener('abort', abort)
         channel.port1.onmessage = () => channel.port1.close()
         channel.port1.postMessage({type:'cancel'})
         setTimeout(() => channel.port1.close(), 1000)
-        reject(error)
+        finish(error)
       }
       const abort = () => cancel(request.signal.reason ?? new Error('Workspace request cancelled'))
       timer = setTimeout(() => cancel(new Error('Workspace request timed out')), self.SANDBOX_REQUEST_TIMEOUT_MS)
-      channel.port1.onmessage = (event) => finish(undefined, event.data)
+      channel.port1.onmessage = (event) => {
+        const message=event.data
+        if(!streaming){
+          if(!message?.stream){finish(undefined,message);return}
+          streaming=true
+          const stream=new ReadableStream({
+            start(controller){streamController=controller},
+            pull(){channel.port1.postMessage({type:'pull'})},
+            cancel(){cancel(new Error('Workspace response cancelled'))},
+          })
+          resolve({...message,body:stream})
+          return
+        }
+        if(message?.type==='chunk'){
+          bytes+=message.body?.byteLength??0
+          if(bytes>MAX_BODY){cancel(new Error('Response too large'));return}
+          streamController.enqueue(new Uint8Array(message.body))
+        }else if(message?.type==='done'){
+          streamController.close()
+          finish()
+        }else if(message?.type==='error')finish(new Error(message.error))
+      }
       request.signal.addEventListener('abort', abort, {once:true})
       if (request.signal.aborted) {
         abort()

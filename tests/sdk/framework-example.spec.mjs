@@ -14,7 +14,7 @@ import {parseFrameworkScriptResults,extractFreshFrameworkScriptResult} from './h
 
 const test=withOwnedWebKitProfile(base)
 
-let host,evidence
+let host,evidence,startExampleHost
 const observations=new WeakMap()
 const captureModules=process.env.SDK_CAPTURE_PREVIEW_MODULES==='1'
 const traceOwner=process.env.SDK_TRACE_OWNER_REQUESTS==='1'
@@ -36,6 +36,22 @@ test.beforeEach(async({page,browser,playwright,browserName})=>{
   })
   const started=Date.now(),pending=new Map(),events=[],errors=[]
   const modules=[],moduleReads=new Set(),failures=[]
+  const entryResponses=[],entryReads=new Set()
+  const entryOrigin=host.previewOrigin
+  // Read only completed entry responses, never import or execute them again.
+  page.on('requestfinished',request=>{
+    const url=request.url()
+    if(!url.startsWith(entryOrigin+'/')||!url.includes('virtual:tanstack-start-dev-client-entry')||entryResponses.length+entryReads.size>=8)return
+    const read=request.response().then(async response=>{
+      if(!response)return
+      const length=Number(response.headers()['content-length'])
+      if(Number.isFinite(length)&&length>65536){entryResponses.push({url,status:response.status(),bodyOmitted:'content-length exceeds 65536 bytes'});return}
+      const body=await response.text()
+      const bytes=Buffer.byteLength(body)
+      entryResponses.push({url,status:response.status(),bytes,sha256:createHash('sha256').update(body).digest('hex'),body:body.slice(0,65536),truncated:body.length>65536,importLines:body.split('\n').filter(line=>/\bimport\b|\bexport\b.*\bfrom\b/.test(line)).slice(0,32).map(line=>line.slice(0,1024))})
+    }).catch(error=>entryResponses.push({url,error:String(error).slice(0,1024)})).finally(()=>entryReads.delete(read))
+    entryReads.add(read)
+  })
   let moduleBytes=0,moduleCaptureLimited=false
   if(captureModules)page.on('response',response=>{
     if(!response.url().startsWith(host.previewOrigin+'/'))return
@@ -58,7 +74,7 @@ test.beforeEach(async({page,browser,playwright,browserName})=>{
   page.on('response',response=>{if(response.status()>=400)record({type:'http-error',url:response.url(),status:response.status()})})
   page.on('pageerror',error=>{errors.push(String(error));if(errors.length>32)errors.shift()})
   page.on('console',message=>{if(['error','warning'].includes(message.type()))record({type:'console-'+message.type(),text:message.text(),location:message.location()})})
-  observations.set(page,{pending,events,errors,failures,modules,moduleReads,captureLimited:()=>moduleCaptureLimited})
+  observations.set(page,{pending,events,errors,failures,modules,moduleReads,entryResponses,entryReads,captureLimited:()=>moduleCaptureLimited})
 })
 test.afterEach(async({page,browser},info)=>{
   // Sample before page/context/browser teardown, only after a real workflow
@@ -83,6 +99,7 @@ test.afterEach(async({page,browser},info)=>{
             reactPreambleInstalled:globalThis.__vite_plugin_react_preamble_installed__===true,
             startOptionsInstalled:Object.hasOwn(globalThis,'__TSS_START_OPTIONS__'),
             bootstrap:globalThis.$_TSR?{hydrated:globalThis.$_TSR.hydrated,streamEnded:globalThis.$_TSR.streamEnded,keys:Object.keys(globalThis.$_TSR)}:null,
+            scripts:[...document.scripts].slice(0,32).map(script=>({src:script.src,type:script.type,async:script.async,defer:script.defer,noModule:script.noModule,text:script.src?undefined:script.textContent.slice(0,2048),textTruncated:!script.src&&script.textContent.length>2048})),
             resources:performance.getEntriesByType('resource').slice(-12).map(entry=>({name:entry.name,duration:entry.duration,responseEnd:entry.responseEnd})),
           })),
           new Promise(resolve=>{timer=setTimeout(()=>resolve({observationTimedOut:true}),1000)}),
@@ -91,6 +108,9 @@ test.afterEach(async({page,browser},info)=>{
       finally{clearTimeout(timer)}
     }
     await previewElement?.dispose()
+    let entryTimer
+    try{await Promise.race([Promise.allSettled([...observed.entryReads]),new Promise(resolve=>{entryTimer=setTimeout(resolve,1000)})])}finally{clearTimeout(entryTimer)}
+    previewFailure={...previewFailure,entryResponses:observed.entryResponses,entryReadsPending:observed.entryReads.size}
   }
   const path=info.outputPath('framework-observations.json')
   let ownerTrace=null
@@ -188,6 +208,7 @@ test.beforeAll(async()=>{
   }
   execFileSync('npm',['install',...(runtimeRoot?[]:['--offline']),'--ignore-scripts','--no-audit','--no-fund',tarball,...(runtimeTarball?[runtimeTarball]:[])],{cwd:join(directory,'example'),env,timeout:30000})
   const {startExample}=await import(pathToFileURL(join(directory,'example/server.mjs')).href)
+  startExampleHost=startExample
   host=await startExample({ownerPort:0,previewPort:0})
   const manifestBytes=readFileSync(join(sdk,runtimeRoot?'package-assets.json':'manifest.json'))
   const buildProfile=runtimeRoot?JSON.parse(readFileSync(join(runtimeRoot,'runtime-profile.json'),'utf8')).buildProfile:JSON.parse(manifestBytes).buildProfile
@@ -315,7 +336,8 @@ for(const kind of ['vite','start'])test('external framework example '+kind+' edi
   await page.locator('#save').click()
   await expect(page.locator('#output')).toContainText('Saved.')
   cold.saveOutput=await page.locator('#output').textContent()
-  await context.route('**/*',async route=>{const origin=new URL(route.request().url()).origin;if(![host.ownerOrigin,host.previewOrigin].includes(origin)){blocked.push(route.request().url());await route.abort()}else await route.continue()})
+  const allowedOrigins=[host.ownerOrigin,host.previewOrigin]
+  await context.route('**/*',async route=>{const origin=new URL(route.request().url()).origin;if(!allowedOrigins.includes(origin)){blocked.push(route.request().url());await route.abort()}else await route.continue()})
   await page.reload()
   resume.ownerDocumentId=await page.evaluate(()=>document.__frameworkDocumentId)
   expect(typeof cold.ownerDocumentId).toBe('string')
@@ -344,6 +366,26 @@ for(const kind of ['vite','start'])test('external framework example '+kind+' edi
   await expect(frame.locator(kind==='vite'?'#message':'h1')).toHaveText('Resumed edit',{timeout:60000})
   resume.newEditPreviewText=await frame.locator(kind==='vite'?'#message':'h1').textContent()
   resume.tests.edited=await runScript(0)
+  // Keep the page-only reload above, then exercise the documented server restart.
+  await page.locator('#save').click()
+  await expect(page.locator('#output')).toContainText('Saved.')
+  const origins={ownerOrigin:host.ownerOrigin,previewOrigin:host.previewOrigin}
+  const beforeRestartDocument=await page.evaluate(()=>document.__frameworkDocumentId)
+  await host.close()
+  host=undefined
+  host=await startExampleHost({ownerPort:Number(new URL(origins.ownerOrigin).port),previewPort:Number(new URL(origins.previewOrigin).port)})
+  expect({ownerOrigin:host.ownerOrigin,previewOrigin:host.previewOrigin}).toEqual(origins)
+  await page.reload()
+  expect(await page.evaluate(()=>document.__frameworkDocumentId)).not.toBe(beforeRestartDocument)
+  await page.locator('#project').selectOption(kind)
+  await page.locator('#resume').click()
+  await expect(frame.locator(kind==='vite'?'#message':'h1')).toHaveText('Resumed edit',{timeout:60000})
+  await expect(page.locator('#script')).toHaveValue('test')
+  workflow.hostRestart={...origins,restoredPreviewText:await frame.locator(kind==='vite'?'#message':'h1').textContent(),test:await runScript(0)}
+  if(evidence.packaging==='split'){
+    workflow.hostRestart.deploymentManifestSHA256=createHash('sha256').update(readFileSync(host.preparedAssets.manifestPath)).digest('hex')
+    expect(workflow.hostRestart.deploymentManifestSHA256).toBe(evidence.deploymentManifestSHA256)
+  }
   await page.locator('#stop').click()
   await expect(page.locator('#output')).toContainText('App stopped',{timeout:30000})
   await expect(page.locator('#preview iframe')).toHaveCount(0)

@@ -16,7 +16,8 @@
       if(url.protocol==='https:')url.protocol='wss:'
       if(!['ws:','wss:'].includes(url.protocol)||url.hash||url.username||url.password)throw new DOMException('Invalid WebSocket URL','SyntaxError')
       const previewAddress=url.host===location.host&&url.protocol===(location.protocol==='https:'?'wss:':'ws:')
-      const guestLoopback=['localhost','127.0.0.1','[::1]'].includes(url.hostname)&&url.protocol==='ws:'
+      const guestLoopback=(['localhost','127.0.0.1','[::1]'].includes(url.hostname)||
+        url.hostname===location.hostname&&url.hostname.endsWith('.localhost'))&&url.protocol==='ws:'
       // Dev servers advertise their guest-side loopback address. It remains a
       // virtual address because the parent selects the one kernel and guest
       // port, but retaining it gives the guest the Host header it advertised.

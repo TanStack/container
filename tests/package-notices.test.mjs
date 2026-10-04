@@ -1,9 +1,9 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtempSync,mkdirSync,writeFileSync} from 'node:fs'
+import {mkdtempSync,mkdirSync,readFileSync,writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {readPackageNotices,addPackageNotices} from '../scripts/package-notices.mjs'
+import {readPackageNotices,readmeMITNotice,addPackageNotices} from '../scripts/package-notices.mjs'
 
 function fixture(){return mkdtempSync(join(tmpdir(),'package-notices-test-'))}
 test('collects license and NOTICE variants without unrelated files',()=>{
@@ -33,4 +33,34 @@ test('rejects missing identity and retains an empty notice result for explicit r
   const directory=fixture()
   assert.throws(()=>addPackageNotices(new Map(),directory,{name:'example'}),/Missing package notice identity/)
   assert.equal(readPackageNotices(directory),'')
+})
+test('collects the full MIT notice shipped in a README, with original attribution',()=>{
+  const readme=readFileSync('node_modules/brorand/README.md','utf8')
+  const expected=readme.slice(readme.indexOf('#### LICENSE')+'#### LICENSE'.length).trim()
+  const directory=fixture()
+  writeFileSync(join(directory,'README.md'),readme)
+  assert.equal(readPackageNotices(directory),expected)
+  assert.ok(expected.includes('Copyright Fedor Indutny, 2014.'))
+  assert.ok(!expected.includes('#### LICENSE'))
+  assert.equal(readmeMITNotice(readme+'\n## Usage\nNot part of the notice\n'),expected)
+})
+test('bundled browser dependencies retain their README license text',()=>{
+  for(const name of ['asn1.js','brorand','des.js','elliptic','hash.js','hmac-drbg',
+    'isarray','miller-rabin','minimalistic-crypto-utils']){
+    const notice=readPackageNotices('node_modules/'+name)
+    assert.match(notice,/^Copyright[^\r\n]+/im,name)
+    assert.match(notice,/Permission is hereby granted/,name)
+    assert.match(notice,/OTHER DEALINGS IN THE\s+SOFTWARE\./i,name)
+  }
+})
+test('README identifiers, links and incomplete MIT notices do not count as license text',()=>{
+  assert.equal(readmeMITNotice('## License\nMIT\n'),'')
+  assert.equal(readmeMITNotice('## License\n[MIT](LICENSE)\n'),'')
+  const full=readFileSync('node_modules/brorand/README.md','utf8')
+  for(const fragment of ['Copyright Fedor Indutny, 2014.',
+    'The above copyright notice and this permission notice shall be included',
+    'FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT']){
+    assert.equal(readmeMITNotice(full.replace(fragment,'')),'')
+  }
+  assert.equal(readmeMITNotice(full.replace('#### LICENSE','#### Usage')),'')
 })

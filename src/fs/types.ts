@@ -8,6 +8,8 @@ export interface VirtualFileSystem {
   // Filesystems with links must reject any linked path component when false.
   writeFile(path: string, contents: Uint8Array,options?:{followSymlinks?:boolean;mode?:number}): Promise<void>
   writeText(path: string, contents: string): Promise<void>
+  symlink?(target:string,path:string):Promise<void>
+  chmod?(path:string,mode:number):Promise<void>
 }
 
 export interface FileSnapshot {

@@ -5,6 +5,48 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => Boolean(window.sandboxLab))
 })
 
+test('URL preview exposes response chunks before the stream completes', async ({ page }) => {
+  await page.evaluate(async () => {
+    const { URLPreview } = window.sandboxLab
+    const server = { async fetch(request: Request) {
+      if (new URL(request.url).pathname === '/stream') {
+        return new Response(new ReadableStream({
+          async start(controller) {
+            controller.enqueue(new TextEncoder().encode('first'))
+            await new Promise(resolve => setTimeout(resolve, 1200))
+            controller.enqueue(new TextEncoder().encode('second'))
+            controller.close()
+          },
+        }), { headers: { 'Content-Type': 'text/plain' } })
+      }
+      return new Response('<!doctype html><html><head></head><body>Stream host</body></html>',
+        { headers: { 'Content-Type': 'text/html' } })
+    } }
+    await URLPreview.mount(document.querySelector('#preview')!, {
+      origin: 'http://127.0.0.1:4174', server,
+    })
+  })
+  const frame = page.frameLocator('#preview iframe')
+  await expect(frame.locator('body')).toContainText('Stream host')
+  const result = await frame.locator('body').evaluate(async () => {
+    const started = performance.now()
+    const response = await fetch('/stream')
+    const reader = response.body!.getReader()
+    const first = await reader.read()
+    const firstMs = performance.now() - started
+    const second = await reader.read()
+    return {
+      first: new TextDecoder().decode(first.value),
+      second: new TextDecoder().decode(second.value),
+      firstMs,
+      totalMs: performance.now() - started,
+    }
+  })
+  expect(result.first).toBe('first')
+  expect(result.second).toBe('second')
+  expect(result.totalMs - result.firstMs).toBeGreaterThan(700)
+})
+
 test('URL preview hydrates real Start, navigates, reloads, and calls server functions', async ({
   page,
 }) => {

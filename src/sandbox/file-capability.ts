@@ -66,9 +66,10 @@ function performFileCall(fs:WorkspaceFiles,writable:boolean,method:string,args:u
     if(flag==='r+'&&!fs.existsSync(path))throw new Error(`ENOENT: ${path}`)
     let bytes=args[1]
     if((String(flag).startsWith('a')||flag==='r+')&&fs.isFileSync(path)){
-      const before=fs.readFileSync(path),offset=String(flag).startsWith('a')?before.length:0
-      const size=Math.max(before.length,offset+bytes.length)
-      if(fs.byteLength-before.length+size>fs.maxBytes)throw new Error('ENOSPC: workspace byte quota exceeded')
+      const beforeSize=fs.statSync(path).size,offset=String(flag).startsWith('a')?beforeSize:0
+      const size=Math.max(beforeSize,offset+bytes.length)
+      if(fs.byteLength-beforeSize+size>fs.maxBytes)throw new Error('ENOSPC: workspace byte quota exceeded')
+      const before=fs.readFileSync(path)
       const next=new Uint8Array(size);next.set(before);next.set(bytes,offset);bytes=next
     }
     return fs.writeFileSync(path, bytes,false,true,settings?.mode)
@@ -106,16 +107,21 @@ function performFileCall(fs:WorkspaceFiles,writable:boolean,method:string,args:u
       validateWorkspacePath(target)
       if(typeof flags!=='number'||!Number.isInteger(flags)||flags<0||flags>7)throw new Error('EINVAL: invalid copy flags')
       if(flags&4)throw new Error('ENOTSUP: reflinks are not supported')
-      const bytes=fs.readFileSync(path)
       if(flags&1&&fs.entryExistsSync(target))throw new Error(`EEXIST: ${target}`)
-      if(target!==path)return fs.writeFileSync(target,bytes,false)
+      if(target!==path){
+        const sourceSize=fs.statSync(path).size
+        const targetSize=fs.isFileSync(target)?fs.statSync(target).size:0
+        if(fs.byteLength-targetSize+sourceSize>fs.maxBytes)throw new Error('ENOSPC: workspace byte quota exceeded')
+        return fs.writeFileSync(target,fs.readFileSync(path),false)
+      }
       return
     }
     if(method==='truncate'){
       const length=args[1]??0
       if(typeof length!=='number'||!Number.isSafeInteger(length))throw new Error('EINVAL: invalid file length')
-      const before=fs.readFileSync(path),size=Math.max(0,length)
-      if(fs.byteLength-before.length+size>fs.maxBytes)throw new Error('ENOSPC: workspace byte quota exceeded')
+      const beforeSize=fs.statSync(path).size,size=Math.max(0,length)
+      if(fs.byteLength-beforeSize+size>fs.maxBytes)throw new Error('ENOSPC: workspace byte quota exceeded')
+      const before=fs.readFileSync(path)
       const bytes=new Uint8Array(size);bytes.set(before.subarray(0,size));return fs.writeFileSync(path,bytes,false)
     }
   }

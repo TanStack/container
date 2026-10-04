@@ -1,0 +1,8 @@
+[
+  {"id":"timer-callback-context","code":"const s=new ALS();return Promise.all(['a','b'].map(v=>s.run(v,()=>new Promise(resolve=>setTimeout(()=>resolve(s.getStore()),2)))))"},
+  {"id":"timer-await-context","code":"const s=new ALS();return Promise.all(['a','b'].map(v=>s.run(v,async()=>{await new Promise(resolve=>setTimeout(resolve,2));return s.getStore()})))"},
+  {"id":"queue-microtask-context","code":"const s=new ALS();return Promise.all(['a','b'].map(v=>s.run(v,()=>new Promise(resolve=>queueMicrotask(()=>resolve(s.getStore()))))))"},
+  {"id":"fetch-await-context","code":"const s=new ALS();return Promise.all(['a','b'].map(v=>s.run(v,async()=>{const response=await fetch('data:text/plain,hello');await response.text();return s.getStore()})))"},
+  {"id":"untransformed-library-await","code":"const s=new ALS();const library=globalThis.__nativeLibrary;return Promise.all(['a','b'].map(v=>s.run(v,()=>library(s))))"},
+  {"id":"timer-bind-receiver","code":"const s=new ALS();return s.run('a',()=>new Promise(resolve=>{const callback=ALS.bind(function(){resolve([s.getStore(),this.value])});setTimeout(()=>callback.call({value:42}),1)}))"}
+]

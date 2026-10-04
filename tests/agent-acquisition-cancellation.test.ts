@@ -5,6 +5,38 @@ const deferred=<T>()=>{let resolve!:(value:T)=>void,reject!:(reason:unknown)=>vo
 const flush=async()=>{for(let i=0;i<12;i++)await Promise.resolve()}
 
 describe('AgentSession resource acquisition cancellation',()=>{
+  it('does not dispatch a queued mutation after the session closes',async()=>{
+    const blocked=deferred<void>(),writeFile=vi.fn(async()=>{}),close=vi.fn()
+    const session=new AgentSession({}, {kernel:{
+      openFileSession:async()=>({call:async()=>blocked.promise,close:async()=>{}}),
+      writeFile,close,shutdown:Promise.resolve(),
+    } as never})
+    const active=session.mkdir({path:'/first'})
+    await flush()
+    const queued=session.write({path:'/queued',text:'must not be written'}).catch(error=>error)
+    await session.close()
+    blocked.resolve();await active
+    expect(await queued).toEqual(expect.objectContaining({message:'Agent session closed'}))
+    expect(writeFile).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledOnce()
+  })
+  it('rejects and disposes an active run when cancellation transport fails',async()=>{
+    const next=deferred<any>(),failure=Error('Cancellation transport failed')
+    const process={next:vi.fn(()=>next.promise),kill:vi.fn(async()=>{throw failure}),dispose:vi.fn(async()=>{}),wait:vi.fn()}
+    const session=new AgentSession({}, {kernel:{spawn:async()=>process} as never})
+    const controller=new AbortController()
+    const result=session.run({command:'node'},controller.signal).catch(error=>error)
+    await flush();expect(process.next).toHaveBeenCalledOnce()
+    controller.abort()
+    expect(await result).toBe(failure)
+    expect(process.dispose).toHaveBeenCalledOnce()
+    expect(process.wait).not.toHaveBeenCalled()
+    next.resolve({type:'stdout',bytes:new TextEncoder().encode('late output')})
+    await flush()
+    expect(process.next).toHaveBeenCalledOnce()
+    expect(process.wait).not.toHaveBeenCalled()
+    expect(process.dispose).toHaveBeenCalledOnce()
+  },1000)
   it('waits for the delayed file handle and its close before allowing the next mutation',async()=>{
     const opened=deferred<any>(),closed=deferred<void>(),call=vi.fn(),close=vi.fn(()=>closed.promise),writeFile=vi.fn(async()=>{})
     const openFileSession=vi.fn(()=>opened.promise),session=new AgentSession({}, {kernel:{openFileSession,writeFile} as never})

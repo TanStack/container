@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    # First publish belongs to the maintainer. Enable automation only after
+    # both packages exist and their npm trusted publishers are configured.
+    if: github.repository == 'TanStack/container' && github.event_name == 'push' && vars.RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - uses: TanStack/config/.github/setup@190f659075ff0845850e330883eb26d7ffd0671f
+      - name: Install OIDC-capable npm and locked build fixtures
+        run: |
+          npm install --global npm@11.12.1
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tests/fixtures/native-runtime-832 --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tests/fixtures/native-oxide-build --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tests/fixtures/wasi-filesystem-codec-114 --ignore-scripts --no-audit --no-fund
+          pnpm exec playwright install --with-deps chromium firefox webkit
+      - run: pnpm test:release
+      - name: Run Changesets (version or publish)
+        uses: changesets/action@6a0a831ff30acef54f2c6aa1cbbc1096b066edaf # v1.7.0
+        with:
+          version: pnpm changeset:version
+          publish: pnpm changeset:publish
+          commit: 'ci: Version Packages'
+          title: 'ci: Version Packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Retain release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-evidence-${{ github.sha }}
+          path: |
+            dist/release-*
+            test-results/release-*
+          if-no-files-found: ignore
+
+  prepare-first-release:
+    if: github.repository == 'TanStack/container' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: TanStack/config/.github/setup@190f659075ff0845850e330883eb26d7ffd0671f
+      - name: Install build fixtures and browsers
+        run: |
+          npm install --global npm@11.12.1
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tests/fixtures/native-runtime-832 --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tests/fixtures/native-oxide-build --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tests/fixtures/wasi-filesystem-codec-114 --ignore-scripts --no-audit --no-fund
+          pnpm exec playwright install --with-deps chromium firefox webkit
+      - run: pnpm test:release
+      - run: pnpm release:prepare
+      - name: Upload tested tarballs for maintainer publishing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: first-release-${{ github.sha }}
+          path: |
+            dist/release-tarballs
+            dist/release-source.tar.gz
+            dist/release-verification.json
+          if-no-files-found: error
+      - name: Retain browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: first-release-tests-${{ github.sha }}
+          path: test-results/release-*
+          if-no-files-found: ignore

@@ -14,7 +14,10 @@ async function fixture() {
   const root = join(temporary, 'package')
   mkdirSync(root)
   cpSync(join(project, 'src/sdk/assets.mjs'), join(root, 'assets.mjs'))
+  cpSync(join(project, 'src/sdk/native-owner-host-assets.mjs'), join(root, 'native-owner-host-assets.mjs'))
   cpSync(join(project, 'scripts/verify-sdk.mjs'), join(root, 'verify-sdk.mjs'))
+  cpSync(join(project, 'scripts/native-sdk-boundary.mjs'), join(root, 'native-sdk-boundary.mjs'))
+  cpSync(join(project, 'src/sdk/native-runtime-paths.mjs'), join(root, 'native-runtime-paths.mjs'))
   cpSync(join(project, 'scripts/sdk-build-profiles.mjs'), join(root, 'sdk-build-profiles.mjs'))
   cpSync(join(project, 'scripts/sdk-license-policy.mjs'), join(root, 'sdk-license-policy.mjs'))
   cpSync(join(project, 'scripts/sdk-api-compare.mjs'), join(root, 'sdk-api-compare.mjs'))
@@ -28,7 +31,7 @@ async function fixture() {
     }}))}
   const shellWasm=Buffer.from('shell fixture')
   const shellHash=createHash('sha256').update(shellWasm).digest('hex')
-  const shell={api:'one-shot',implementation:'mvdan.cc/sh/v3',version:'3.14.1',statePersistence:false,terminal:false,numericFdRedirection:'unsupported',externalCommands:'kernel-processes',goBuild:{trimpath:true,ldflags:['-s','-w']},wasmSHA256:shellHash,sourceSHA256:'1'.repeat(64),lockSHA256:'2'.repeat(64)}
+  const shell={api:'one-shot',implementation:'mvdan.cc/sh/v3',version:'3.14.1',statePersistence:false,terminal:false,numericFdRedirection:'unsupported',externalCommands:'kernel-processes',goBuild:{trimpath:true,buildvcs:false,ldflags:['-s','-w']},wasmSHA256:shellHash,sourceSHA256:'1'.repeat(64),lockSHA256:'2'.repeat(64)}
   const declarationPath='types/sdk/index.d.ts'
   const declaration='export declare const SDK_COMPATIBILITY: { readonly apiVersion: 1; readonly stability: "experimental" };\n'
   const contract={format:1,apiVersion:1,stability:'experimental',entrypoints:{'.':{types:'./'+declarationPath,exports:[{name:'SDK_COMPATIBILITY',flags:2,declarations:[{path:declarationPath,text:declaration}]}]}},declarations:[{path:declarationPath,bytes:Buffer.byteLength(declaration),sha256:createHash('sha256').update(declaration).digest('hex')}]}
@@ -52,6 +55,8 @@ async function fixture() {
     ['runtime/mvdan-shell/build.json', JSON.stringify({mvdan:'3.14.1',goBuild:shell.goBuild,wasmSHA256:shellHash,sourceSHA256:shell.sourceSHA256,lockSHA256:shell.lockSHA256})],
   ])
   const coverage={format:1,generatedBundles:{artifacts:['index.js','kernel-host.js','runtime/workers/'],workspace:[],packages:[],notice:'licenses/THIRD-PARTY-NOTICES.txt'},native:[{artifacts:['runtime/compiler/','runtime/mvdan-shell/'],source:'fixture',notice:'licenses/THIRD-PARTY-NOTICES.txt'}],localArtifacts:['api-contract.json','compatibility-policy.json','kernel-host.html','package.json','preview-host/','assets.mjs','verify-sdk.mjs','sdk-api-compare.mjs','sdk-build-profiles.mjs','sdk-license-policy.mjs','check-sdk-release.mjs','size-report.json','types/','licenses/']}
+  const supportFiles=['native-owner-host-assets.mjs','native-sdk-boundary.mjs','native-runtime-paths.mjs']
+  coverage.localArtifacts.push(...supportFiles)
   const coverageText=JSON.stringify(coverage)
   files.set('licenses/THIRD-PARTY-NOTICES.txt','fixture notice')
   files.set('licenses/SHIPPED-INPUTS.json',coverageText)
@@ -61,7 +66,7 @@ async function fixture() {
     mkdirSync(dirname(join(root, path)), {recursive: true})
     writeFileSync(join(root, path), contents)
   }
-  const paths = [...files.keys(), 'assets.mjs', 'verify-sdk.mjs', 'sdk-api-compare.mjs', 'sdk-build-profiles.mjs', 'sdk-license-policy.mjs', 'check-sdk-release.mjs']
+  const paths = [...files.keys(),...supportFiles, 'assets.mjs', 'verify-sdk.mjs', 'sdk-api-compare.mjs', 'sdk-build-profiles.mjs', 'sdk-license-policy.mjs', 'check-sdk-release.mjs']
   writeFileSync(join(root, 'manifest.json'), JSON.stringify({experimental: true,apiContract:{path:'api-contract.json',format:1,apiVersion:1,stability:'experimental',sha256:contractHash,exports:{'.':['SDK_COMPATIBILITY']}},compatibilityPolicy:{path:'compatibility-policy.json',format:1,stability:'experimental',sha256:policyHash},attestations:{candidateCompatibility:'candidate-compatibility.json',releaseRecord:'release-record.json'}, shell,sizeReport:{format:1,path:'size-report.json',bytes:Buffer.byteLength(sizeText),sha256:createHash('sha256').update(sizeText).digest('hex')},licenseCoverage:{path:'licenses/SHIPPED-INPUTS.json',sha256:createHash('sha256').update(coverageText).digest('hex'),packageCount:0}, files: paths.map(path => {
     const content = readFileSync(join(root, path))
     return {path, bytes: content.length, sha256: createHash('sha256').update(content).digest('hex')}

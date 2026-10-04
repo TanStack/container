@@ -1,4 +1,4 @@
-type InstallPhase = 'install-planning' | 'workspace-staging' | 'tar-extraction' | 'workspace-commit' | 'package-file-write'
+type InstallPhase = 'install-planning' | 'workspace-staging' | 'tar-extraction' | 'workspace-commit' | 'package-file-write' | 'archive-download' | 'archive-cache-read' | 'archive-cache-write' | 'gzip-decompression'
 type InstallPhaseState = 'begin' | 'end' | 'error'
 declare global {
   var __sandboxInstallPhaseTrace: ((stage: InstallPhase, state: InstallPhaseState, traceId?: number) => number | undefined) | undefined
@@ -32,4 +32,10 @@ export function traceInstallPhase<T>(stage: InstallPhase, operation: () => T): T
     finish('error')
     throw error
   }
+}
+
+export async function traceAsyncInstallPhase<T>(stage:InstallPhase,operation:()=>Promise<T>):Promise<T>{
+  const finish=startInstallPhase(stage)
+  try{const result=await operation();finish('end');return result}
+  catch(error){finish('error');throw error}
 }

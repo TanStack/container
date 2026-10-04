@@ -1,0 +1,8 @@
+{
+  "name": "native-filesystem-codec-114-control",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@napi-rs/wasm-runtime": "1.1.4"
+  }
+}

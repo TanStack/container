@@ -1,8 +1,73 @@
 import {expect,test} from 'vitest'
 import {VirtualNetwork,type PortEvent} from '../src/sandbox/virtual-network'
-import {readHTTPResponse} from '../src/sandbox/worker-http'
+import {readHTTPResponse,WorkerHTTP} from '../src/sandbox/worker-http'
+
+test('ordinary socket destruction sends EOF, explicit reset reports ECONNRESET',async()=>{
+  for(const reset of [false,true]){
+    const {net,server,client}=pair(),accepted=await net.next(1,server.id)
+    if(accepted?.type!=='connection')throw Error('Missing connection')
+    net.destroy(2,client.id,reset)
+    expect(await net.next(1,accepted.id)).toEqual(reset?{type:'error',code:'ECONNRESET'}:{type:'end'})
+    net.release(1);net.release(2)
+  }
+})
+
+test('ordinary destruction preserves a full queued buffer before EOF',async()=>{
+  const {net,server,client}=pair(),accepted=await net.next(1,server.id)
+  if(accepted?.type!=='connection')throw Error('Missing connection')
+  const bytes=new Uint8Array(65536).fill(42)
+  await net.write(2,client.id,bytes)
+  net.destroy(2,client.id)
+  expect(await net.next(1,accepted.id)).toEqual({type:'data',bytes})
+  expect(await net.next(1,accepted.id)).toEqual({type:'end'})
+  net.release(1);net.release(2)
+})
+
+test('a completed preview response sends FIN rather than resetting its server peer',async()=>{
+  const net=new VirtualNetwork(),server=net.listen(1,8000)
+  const client=new WorkerHTTP({connect:async()=>{
+    const socket=net.connect(2,8000)
+    return {port:socket.port,remotePort:socket.remotePort,
+      read:()=>net.next(2,socket.id),write:(bytes:Uint8Array)=>net.write(2,socket.id,bytes),
+      end:async()=>net.end(2,socket.id),close:async()=>net.destroy(2,socket.id)}
+  }},8000)
+  try{
+    const response=client.fetch(new Request('http://127.0.0.1:8000/'))
+    const accepted=await net.next(1,server.id)
+    if(accepted?.type!=='connection')throw Error('Missing connection')
+    expect((await net.next(1,accepted.id))?.type).toBe('data')
+    await net.write(1,accepted.id,new TextEncoder().encode('HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok'))
+    expect(await (await response).text()).toBe('ok')
+    expect(await net.next(1,accepted.id)).toEqual({type:'end'})
+  }finally{net.release(1);net.release(2)}
+})
 
 function pair(){const net=new VirtualNetwork(),server=net.listen(1,8000),client=net.connect(2,8000);return {net,server,client}}
+test('forwarded reservations allocate upstream once and can be reused after close',()=>{
+  const root=new VirtualNetwork(),nested=new VirtualNetwork()
+  let allocations=0
+  nested.setListenPortAllocator(requested=>{allocations++;return root.reserveListenerPort(requested)})
+  const port=nested.reserveListenerPort()
+  const local=nested.listenReserved(1,port)
+  const forwarded=root.listenReserved(2,port)
+  expect(allocations).toBe(1)
+  expect(nested.listeningPorts).toContain(port)
+  root.closeServer(2,forwarded.id)
+  nested.closeServer(1,local.id)
+  expect(root.listen(3,port).port).toBe(port)
+})
+test('reserved ephemeral ports are unique and cannot be taken before forwarding',()=>{
+  const net=new VirtualNetwork(),preview=net.listen(1)
+  const first=net.reserveListenerPort(),second=net.reserveListenerPort()
+  expect(new Set([preview.port,first,second]).size).toBe(3)
+  expect(()=>net.listen(2,first)).toThrow('EADDRINUSE')
+  expect(()=>net.reserveListenerPort(preview.port)).toThrow('EADDRINUSE')
+  expect(()=>net.reserveListenerPort(second)).toThrow('EADDRINUSE')
+  const forwarded=net.listenReserved(2,first)
+  expect(forwarded.port).toBe(first)
+  net.releaseReservedPort(second)
+  net.release(1);net.release(2)
+})
 test('port subscriptions replay sorted open ports and snapshots are independent',()=>{
   const net=new VirtualNetwork(),high=net.listen(1,9000),low=net.listen(1,8000)
   const events:PortEvent[]=[],unsubscribe=net.subscribePorts(event=>events.push(event))

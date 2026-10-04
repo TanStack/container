@@ -33,3 +33,16 @@ export declare function copyPreviewHostAssets(destination: string): string
 
 /** Read a fresh copy of the verified preview-host deployment contract. */
 export declare function readPreviewHostHostingContract(): PreviewHostHostingContract
+
+/** Create static owner files and their hosting headers for a separate origin. */
+export declare function createNativeOwnerHostAssets(options: {
+  runtimeCandidates?: ReadonlyArray<{workerURL: string; toolchain: {vite: string; rolldown: string}}>
+  parentOrigin: string
+  previewOrigin: string
+  sdkPath?: string
+  workerPath?: string
+  assetBaseURL?: string
+}): {
+  files: Record<string, string>
+  headers: Record<string, Record<string, string>>
+}

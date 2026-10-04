@@ -40,7 +40,7 @@ function fixture(profile) {
   const shellWasm=Buffer.from('shell fixture'),shellHash=createHash('sha256').update(shellWasm).digest('hex'),sourceHash='1'.repeat(64),lockHash='2'.repeat(64)
   mkdirSync(join(root,'runtime/mvdan-shell'),{recursive:true})
   writeFileSync(join(root,'runtime/mvdan-shell/shell.wasm'),shellWasm)
-  const goBuild={trimpath:true,ldflags:['-s','-w']}
+  const goBuild={trimpath:true,buildvcs:false,ldflags:['-s','-w']}
   writeFileSync(join(root,'runtime/mvdan-shell/build.json'),JSON.stringify({mvdan:'3.14.1',goBuild,wasmSHA256:shellHash,sourceSHA256:sourceHash,lockSHA256:lockHash}))
   paths.push('runtime/mvdan-shell/shell.wasm','runtime/mvdan-shell/build.json')
   const manifest = {experimental: true,apiContract:{path:'api-contract.json',format:1,apiVersion:1,stability:'experimental',sha256:contractHash,exports:{'.':['SDK_COMPATIBILITY']}},compatibilityPolicy:{path:'compatibility-policy.json',format:1,stability:'experimental',sha256:policyHash},attestations:{candidateCompatibility:'candidate-compatibility.json',releaseRecord:'release-record.json'},shell:{api:'one-shot',implementation:'mvdan.cc/sh/v3',version:'3.14.1',statePersistence:false,terminal:false,numericFdRedirection:'unsupported',externalCommands:'kernel-processes',goBuild,wasmSHA256:shellHash,sourceSHA256:sourceHash,lockSHA256:lockHash}, files: []}
@@ -169,6 +169,15 @@ test('accepts complete artifact and hosting manifests', () => {
   assert.equal(result.files, 23)
   assert.equal(result.previewRoutes, 6)
   assert.ok(result.bytes > 0)
+})
+
+test('rejects a shell build with checkout-dependent VCS stamps',()=>{
+  const f=fixture(),path=join(f.root,'runtime/mvdan-shell/build.json')
+  const shellBuild=JSON.parse(readFileSync(path))
+  shellBuild.goBuild.buildvcs=true
+  f.manifest.shell.goBuild.buildvcs=true
+  writeFileSync(path,JSON.stringify(shellBuild));f.seal()
+  assert.throws(()=>verifySDK(f.root),/VCS stamps/)
 })
 
 test('rejects a candidate compatibility claim without explicit evidence',()=>{

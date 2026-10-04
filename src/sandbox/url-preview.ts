@@ -2,11 +2,13 @@ import type { PreviewState } from './preview'
 import { IncomingRequest } from './incoming-request'
 import type { WorkerWebSocket } from './worker-websocket'
 import {abortableWait} from './abortable-wait'
+import {injectPreviewScripts} from './preview-html'
 import {previewRequestTimeout,previewStartupTimeout,type PreviewTimeoutOptions} from './request-timeouts'
 
 const leasedOrigins = new Set<string>()
-type PreviewServer = {fetch(request: Request): Promise<Response>}
-type ConnectWebSocket = (url:string,protocols:string[])=>Promise<WorkerWebSocket>
+type PreviewServer = {fetch(request: Request): Promise<Response>;revision?:()=>number|Promise<number>}
+type PreviewWebSocket=Pick<WorkerWebSocket,'protocol'|'send'|'next'|'close'|'dispose'>
+type ConnectWebSocket = (url:string,protocols:string[])=>Promise<PreviewWebSocket>
 type DocumentBoot={url:string;clientId?:string;finish(error?:Error):void}
 const previewPolicy=(scriptOrigins:string[],connectOrigins:string[])=>
   `default-src 'none'; script-src 'self' 'unsafe-inline'${scriptOrigins.length?' '+scriptOrigins.join(' '):''}; style-src 'self' 'unsafe-inline'; connect-src 'self'${connectOrigins.length?' '+connectOrigins.join(' '):''}; img-src 'self' data: blob:; font-src 'self'; worker-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'`
@@ -67,6 +69,7 @@ export class URLPreview {
   #sockets=new Set<()=>void>()
   #previousSockets=new Set<()=>void>()
   #reloadHandoff:string[]=[]
+  #documentRevision?:{url:string;revision:number}
   #socketPending=0
   #requests=new Set<AbortController>()
   #socketListener=(event:MessageEvent)=>{
@@ -118,7 +121,7 @@ export class URLPreview {
       (url.protocol !== 'https:' &&
         !(
           url.protocol === 'http:' &&
-          ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+          (['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) || url.hostname.endsWith('.localhost'))
         ))
     )
       throw new Error('Preview requires a separate HTTPS or loopback origin')
@@ -257,7 +260,11 @@ export class URLPreview {
     const controller=new AbortController()
     this.#requests.add(controller)
     const timer=setTimeout(()=>controller.abort(new Error('Workspace request timed out')),this.requestTimeoutMs)
-    port.onmessage=event=>{if(event.data?.type==='cancel')controller.abort(new Error('Preview request cancelled'))}
+    let pull: (()=>void)|undefined,pullCredits=0,streamed=false
+    port.onmessage=event=>{
+      if(event.data?.type==='cancel')controller.abort(new Error('Preview request cancelled'))
+      else if(event.data?.type==='pull'){pullCredits++;pull?.()}
+    }
     let boot:DocumentBoot|undefined,bootError:Error|undefined
     try {
       if (this.#closed) throw new Error('Preview closed')
@@ -265,6 +272,8 @@ export class URLPreview {
       if (url.origin !== this.origin || url.pathname.startsWith('/__sandbox/'))
         throw new Error('Request outside workspace')
       boot=this.#bootNavigation(message,url)
+      const requestRevision=message.navigation?.mode==='navigate'&&message.navigation.destination==='iframe'
+        ?await this.server.revision?.():undefined
       let response: Response
       const asset = this.#assets[url.pathname]
       if (asset && ['GET', 'HEAD'].includes(message.method))
@@ -299,10 +308,31 @@ export class URLPreview {
         const html = await abortableWait(response.text(),controller.signal)
         // Preserve Start's original module URLs and hydration payload. This script only provides agent inspection.
         const script = (this.connectWebSocket?'<script src="/__sandbox/websocket.js"></script>':'')+'<script src="/__sandbox/inspect.js"></script>'
-        const injected=corsExternalScripts(html,this.scriptOrigins).replace(/<head(?=[\t\n\f\r >])([^>]*)>/i, `<head$1>${script}`)
-        if(boot&&!bootError&&response.ok&&injected===html)
-          bootError=new Error(`Preview document ${url.pathname}${url.search} cannot start inspection: HTML without an explicit head element is not supported`)
+        const injected=injectPreviewScripts(corsExternalScripts(html,this.scriptOrigins),script)
         body = new TextEncoder().encode(injected).buffer
+        if(response.ok&&message.navigation?.mode==='navigate'&&message.navigation.destination==='iframe'&&
+          requestRevision!==undefined)this.#documentRevision={url:url.href,revision:requestRevision}
+      } else if(response.body&&message.method!=='HEAD'&&![204,205,304].includes(response.status)) {
+        this.requests.push({method:message.method,pathname:url.pathname,status:response.status})
+        port.postMessage({status:response.status,headers:[...headers],stream:true})
+        streamed=true
+        const reader=response.body.getReader()
+        let size=0
+        try {
+          while(true){
+            if(pullCredits===0)await abortableWait(new Promise<void>(resolve=>{pull=resolve}),controller.signal)
+            pull=undefined
+            pullCredits--
+            const {done,value}=await abortableWait(reader.read(),controller.signal)
+            if(done){port.postMessage({type:'done'});break}
+            size+=value.byteLength
+            if(size>16*1024*1024)throw new Error('Preview response too large')
+            const chunk=value.slice().buffer
+            port.postMessage({type:'chunk',body:chunk},[chunk])
+          }
+        } finally {await reader.cancel().catch(()=>{})}
+        if(bootError)boot?.finish(bootError)
+        return
       } else body = await abortableWait(response.arrayBuffer(),controller.signal)
       controller.signal.throwIfAborted()
       if (body.byteLength > 16 * 1024 * 1024)
@@ -321,7 +351,7 @@ export class URLPreview {
       if(bootError)boot?.finish(bootError)
     } catch (error) {
       this.diagnostics.push(`Request ${message?.method ?? 'unknown'} ${message?.url ?? 'unknown'}: ${String(error)}`)
-      port.postMessage({ error: String(error) })
+      port.postMessage(streamed?{type:'error',error:String(error)}:{error:String(error)})
       boot?.finish(bootError??new Error(`Preview document request failed: ${String(error)}`))
     } finally {
       clearTimeout(timer)
@@ -333,7 +363,7 @@ export class URLPreview {
 
   async #openWebSocket(message:any,port:MessagePort,documentPort:MessagePort){
     if(this.#closed||documentPort!==this.#socketDocument||this.#sockets.size>=32||this.#socketPending>=32){port.postMessage({type:'error'});port.close();return}
-    let socket:WorkerWebSocket|undefined,closed=false,reading=false,pullPending=false,closing=false,detached=false,detachTimer:ReturnType<typeof setTimeout>|undefined,queued=0,writes=Promise.resolve()
+    let socket:PreviewWebSocket|undefined,closed=false,reading=false,pullPending=false,closing=false,detached=false,detachTimer:ReturnType<typeof setTimeout>|undefined,queued=0,writes=Promise.resolve()
     const cleanup=()=>{if(closed)return;closed=true;if(detachTimer)clearTimeout(detachTimer);this.#sockets.delete(cleanup);this.#previousSockets.delete(cleanup);port.close();void socket?.dispose()}
     const fail=(error:unknown)=>{if(!closed){const message='WebSocket: '+String(error);this.diagnostics.push(message);port.postMessage({type:'error',message});cleanup()}}
     this.#sockets.add(cleanup);this.#socketPending++
@@ -341,10 +371,19 @@ export class URLPreview {
       if(typeof message.url!=='string'||!Array.isArray(message.protocols)||message.protocols.some((value:unknown)=>typeof value!=='string'))throw new Error('Invalid WebSocket request')
       const url=new URL(message.url),origin=new URL(this.origin)
       const previewAddress=url.host===origin.host&&url.protocol===(origin.protocol==='https:'?'wss:':'ws:')
-      const guestLoopback=['localhost','127.0.0.1','[::1]'].includes(url.hostname)&&url.protocol==='ws:'
+      const guestLoopback=(['localhost','127.0.0.1','[::1]'].includes(url.hostname)||
+        url.hostname===origin.hostname&&url.hostname.endsWith('.localhost'))&&url.protocol==='ws:'
       if((!previewAddress&&!guestLoopback)||url.username||url.password||url.hash||url.pathname.startsWith('/__sandbox/'))throw new Error('WebSocket outside workspace')
       socket=await this.connectWebSocket!(url.href,message.protocols)
       if(closed||documentPort!==this.#socketDocument){await socket.dispose();return}
+      const document=this.#documentRevision
+      const currentRevision=document?await this.server.revision?.():undefined
+      if(closed||documentPort!==this.#socketDocument){await socket.dispose();return}
+      if(document&&this.#documentRevision===document&&currentRevision!==document.revision){
+        this.navigate(document.url)
+        cleanup()
+        return
+      }
       const active=socket
       let continueSuperseded=false
       const pull=()=>{

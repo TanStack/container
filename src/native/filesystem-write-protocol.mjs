@@ -1,0 +1,1 @@
+export const WRITE_FILE_WITH_PARENTS='__tanstackWriteFileWithParents'

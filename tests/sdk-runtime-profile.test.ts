@@ -13,7 +13,7 @@ const composite={buildProfile:'experimental-fibers-simd-lazy-initializers-o2-ite
 
 describe('packaged SDK runtime profiles',()=>{
   it('allows the explicit segmented diagnostic without changing runtime limits or isolation',()=>{
-    for(const suffix of ['-segmented-interpreter','-segmented-interpreter-batched','-segmented-interpreter-batched-native-utf8','-segmented-interpreter-batched-native-utf8-buffer','-segmented-interpreter-batched-native-utf8-guest-sampling']){
+    for(const suffix of ['-segmented-interpreter','-segmented-interpreter-batched','-segmented-interpreter-batched-native-utf8','-segmented-interpreter-batched-native-utf8-buffer','-segmented-interpreter-batched-native-utf8-guest-sampling','-segmented-interpreter-batched-native-utf8-buffer-guest-sampling']){
       const diagnostic={...composite,buildProfile:composite.buildProfile+suffix}
       for(const workload of ['vite','tanstack-start'] as const){
       const baseline=resolveSDKRuntimeProfile(composite,workload)

@@ -1,0 +1,8 @@
+{
+  "name": "native-oxide-build-toolchain",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "emnapi": "1.11.1"
+  }
+}

@@ -10,12 +10,13 @@ been published yet.
 
 ## What works
 
-The tested workflows cover Vite 7 and representative TanStack Start apps:
+The current native-only private SDK covers Vite 8 and representative TanStack Start apps:
 installation, script and test execution, live edits, previews, SSR, hydration,
 server functions, navigation, and save/reload/resume. Private split-package
-candidates have passed repeated Chromium and Firefox runs. The source-bound
-alpha package pair is undergoing its own verification. Actual Safari remains
-unverified. Earlier candidate results do not approve later package builds.
+candidates have passed Chromium, Firefox and Playwright WebKit runs. A fresh
+source-bound native alpha build and full-site acceptance are still required.
+Actual Safari remains unverified. Earlier candidate results do not approve later
+package builds. Older Vite 7 and QuickJS results are historical.
 
 This is not a complete Node.js or operating-system implementation. Native addons,
 arbitrary binaries, dependency install scripts and unrestricted networking are
@@ -32,7 +33,7 @@ The SDK is standalone, with no TanStack.com-specific runtime code:
 - Your app explicitly prepares and hosts browser assets. There is no automatic
   postinstall download.
 
-Start with the [SDK setup guide](src/sdk/PACKAGES.md) and
+Start with the [native SDK setup guide](src/sdk/NATIVE_PACKAGES.md) and
 [compatibility boundaries](src/sdk/COMPATIBILITY.md). The
 [basic example](examples/sdk-basic/README.md) and
 [Vite/Start examples](examples/sdk-frameworks/README.md) demonstrate adoption.

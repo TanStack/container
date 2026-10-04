@@ -7,6 +7,7 @@ import {spawnSync} from 'node:child_process'
 import {createRequire} from 'node:module'
 import {pathToFileURL} from 'node:url'
 import {verifyDeploymentAssets} from './sdk-external-assets.mjs'
+import {assertNativeSDKRuntimePaths} from './native-sdk-boundary.mjs'
 import {build} from 'vite'
 import ts from 'typescript'
 
@@ -82,17 +83,52 @@ const installedDirectories=['@tanstack/browser-sandbox-experimental','@tanstack/
 const inventories=installedDirectories.map(installedPackageInventory)
 const require=createRequire(join(consumer,'package.json'))
 const assets=await import(pathToFileURL(require.resolve('@tanstack/browser-sandbox-experimental/assets')))
+const nativeOnly=assets.readRuntimeProfileManifest().buildProfile==='native'
 const output=await assets.prepareRuntimeAssets(join(consumer,'hosted'))
 const manifest=JSON.parse(readFileSync(output.manifestPath,'utf8'))
 verifyDeploymentAssets(output.directory,manifest,{packageManifestSHA256:manifest.packageManifestSHA256,expectedFiles:manifest.files})
-for(const path of ['runtime/workers/kernel.js','runtime/compiler/esbuild.wasm','kernel-host.html','preview-host/hosting.json'])assert.ok(existsSync(join(output.directory,path)),path)
+for(const path of nativeOnly?['runtime/workers/mvdan-shell.js','runtime/mvdan-shell/shell.wasm','preview-host/hosting.json']:
+  ['runtime/workers/kernel.js','runtime/compiler/esbuild.wasm','kernel-host.html','preview-host/hosting.json'])assert.ok(existsSync(join(output.directory,path)),path)
+if(nativeOnly){
+  assertNativeSDKRuntimePaths(manifest.files.map(file=>file.path))
+  assert.equal(output.kernelHostPath,undefined)
+  for(const candidate of assets.readNativeRuntimeCandidates())assert.ok(existsSync(join(output.directory,candidate.workerURL.slice(1))))
+}
 await assert.rejects(assets.prepareRuntimeAssets(output.directory))
 const installedSDK=dirname(require.resolve('@tanstack/browser-sandbox-experimental/assets'))
 const packageJSON=JSON.parse(readFileSync(join(installedSDK,'package.json'),'utf8'))
 const sdk=await import(pathToFileURL(join(installedSDK,packageJSON.exports['.'].import)))
-assert.equal(typeof sdk.WorkerKernel,'function')
-writeFileSync(join(consumer,'types-check.ts'),`import {WorkerKernel, HostedKernel, AgentSession, SDK_COMPATIBILITY, resolveSDKRuntimeProfile} from '@tanstack/browser-sandbox-experimental';
-import {prepareRuntimeAssets, readRuntimeProfileManifest, readPreviewHostHostingContract} from '@tanstack/browser-sandbox-experimental/assets';
+assert.equal(typeof sdk.WorkerKernel,nativeOnly?'undefined':'function')
+if(nativeOnly){assert.equal(typeof sdk.NativeOwnerClient,'function');assert.throws(()=>new sdk.AgentSession(),/backend is required/)}
+const nativeEntry=packageJSON.exports['./native']
+if(nativeEntry){
+  const nativeSDK=await import(pathToFileURL(join(installedSDK,nativeEntry.import)))
+  assert.equal(typeof nativeSDK.AgentSession,'function')
+  assert.equal(typeof nativeSDK.NativeAgentBackend,'function')
+  assert.equal('WorkerKernel' in nativeSDK,false)
+  assert.throws(()=>new nativeSDK.AgentSession(),/backend is required/)
+}
+writeFileSync(join(consumer,'types-check.ts'),(nativeOnly?`import {AgentSession, NativeDevServer, NativeOwnerClient, NativeAgentBackend, SDK_COMPATIBILITY} from '@tanstack/browser-sandbox-experimental';
+import {prepareRuntimeAssets, readNativeRuntimeCandidates, createNativeOwnerHostAssets} from '@tanstack/browser-sandbox-experimental/assets';
+declare const owner: NativeOwnerClient;
+const agent = new AgentSession(new NativeAgentBackend(owner), {maxOutputBytes:1024});
+agent.read({path:'/app/package.json'});
+agent.snapshot({encoding:'binary'});
+const api: 8 = SDK_COMPATIBILITY.apiVersion;
+const catalog = readNativeRuntimeCandidates('/runtime/');
+const server = new NativeDevServer({}, {workerURL:catalog[0].workerURL,runtimeCandidates:catalog});
+async function setup(){
+ const assets = await prepareRuntimeAssets('/absolute/new/assets');
+ const legacyHost: string | undefined = assets.kernelHostPath;
+ const hosting = createNativeOwnerHostAssets({parentOrigin:'https://parent.example.test',previewOrigin:'https://preview.example.test',runtimeCandidates:catalog});
+ return {assets,legacyHost,hosting};
+}
+// @ts-expect-error Native sessions have no default legacy kernel.
+new AgentSession();
+// @ts-expect-error The native root does not export WorkerKernel.
+import {WorkerKernel} from '@tanstack/browser-sandbox-experimental';
+`: `import {WorkerKernel, HostedKernel, AgentSession, NativeDevServer, NativeOwnerClient, NativeAgentBackend, SDK_COMPATIBILITY, resolveSDKRuntimeProfile} from '@tanstack/browser-sandbox-experimental';
+import {prepareRuntimeAssets, readRuntimeProfileManifest, readPreviewHostHostingContract, createNativeOwnerHostAssets} from '@tanstack/browser-sandbox-experimental/assets';
 async function setup(){
  const assets = await prepareRuntimeAssets('/absolute/new/assets');
  const directory: string = assets.runtimeDirectory;
@@ -106,11 +142,59 @@ async function setup(){
  return {directory, bytes, binarySnapshot, contract:readPreviewHostHostingContract(), api:SDK_COMPATIBILITY.apiVersion, hosted:HostedKernel};
 }
 void setup;
-`)
+async function nativeSetup(frame: Window){
+ const dev = new NativeDevServer({}, {workerURL:'https://example.test/runtime/native/engine.js', workerType:'classic', env:{NATIVE_CLASSIC_VM:'1',NATIVE_BROWSER_MODULES:'1'}});
+ const port: number = await dev.ready;
+ const response: Response = await dev.fetch(new Request('http://127.0.0.1:'+port+'/'));
+ const bytes: Uint8Array = await dev.readFile('/app/package.json');
+ const command = await dev.terminalCommand('pwd', '/app');
+ const exitCode: number = command.exitCode;
+ const stdout: string = command.stdout;
+ await dev.dispose();
+ const ownerAssets = createNativeOwnerHostAssets({parentOrigin:'https://parent.example.test',previewOrigin:'https://preview.example.test',buildId:'consumer-build',previewHostSuffix:'.example.test'});
+ const client = await NativeOwnerClient.connect(frame, 'https://owner.example.test', undefined, {expectedBuildId:'consumer-build'});
+ const backend = new NativeAgentBackend(client, '/app');
+ const agent = new AgentSession({}, {kernel:backend});
+ const listed = await agent.list();
+ const installed = await agent.install({options:{ignoreScripts:true,cwd:'/app'}});
+ const count: number = installed.installed;
+ const resources = await agent.resources();
+ if ('scope' in resources) { const active: number = resources.commands; void active; }
+ const snapshot = await agent.snapshot({encoding:'binary'});
+ await agent.restore({snapshot});
+ await agent.close();
+ void listed; void count;
+ void ownerAssets;
+ return {response,bytes,exitCode,stdout,client};
+}
+void nativeSetup;
+`)+(nativeEntry?`
+import {AgentSession as NativeAgentSession,NativeAgentBackend as NativeBackend,NativeOwnerClient as NativeClient} from '@tanstack/browser-sandbox-experimental/native';
+declare const nativeClient: NativeClient;
+const nativeAgent = new NativeAgentSession(new NativeBackend(nativeClient), {maxOutputBytes:1024});
+nativeAgent.snapshot({encoding:'binary'});
+// @ts-expect-error Native sessions have no implicit legacy kernel.
+new NativeAgentSession();
+`:''))
 const typeResolution=verifyConsumerTypes(consumer)
 writeFileSync(join(consumer,'index.html'),'<script type="module" src="/main.js"></script>')
-writeFileSync(join(consumer,'main.js'),'import {WorkerKernel} from "@tanstack/browser-sandbox-experimental"; globalThis.createSandbox = () => new WorkerKernel({}, {assetBaseURL:new URL("/sandbox/runtime/",location.origin).href});')
+writeFileSync(join(consumer,'main.js'),nativeOnly?
+  'import {AgentSession, NativeAgentBackend} from "@tanstack/browser-sandbox-experimental"; globalThis.createSandbox = owner => new AgentSession(new NativeAgentBackend(owner));':
+  'import {WorkerKernel} from "@tanstack/browser-sandbox-experimental"; globalThis.createSandbox = () => new WorkerKernel({}, {assetBaseURL:new URL("/sandbox/runtime/",location.origin).href});')
 await build({root:consumer,configFile:false,publicDir:false,logLevel:'error',build:{outDir:join(consumer,'dist'),emptyOutDir:false}})
+let nativeBundleChecked=false
+if(nativeEntry){
+  writeFileSync(join(consumer,'native-main.js'),'import {AgentSession, NativeAgentBackend} from "@tanstack/browser-sandbox-experimental/native"; globalThis.createNativeAgent = owner => new AgentSession(new NativeAgentBackend(owner));')
+  await build({root:consumer,configFile:false,publicDir:false,logLevel:'error',
+    plugins:[{name:'native-consumer-boundary',generateBundle(){
+      const ids=[...this.getModuleIds()]
+      assert.ok(ids.some(id=>id===join(installedSDK,nativeEntry.import)),'Consumer did not import installed native entry')
+      assert.ok(!ids.some(id=>(!nativeOnly&&id===join(installedSDK,'index.js'))||id.includes('/runtime/workers/')),'Native consumer imported the legacy entry or worker assets')
+      nativeBundleChecked=true
+    }}],build:{outDir:join(consumer,'dist-native'),emptyOutDir:false,
+      lib:{entry:join(consumer,'native-main.js'),formats:['es'],fileName:()=> 'consumer.js'}}})
+  assert.ok(nativeBundleChecked)
+}
 npm(['uninstall','--offline','--ignore-scripts','--no-audit','--no-fund',...packageEvidence.map(item=>item.name)],consumer)
 for(const directory of installedDirectories)assert.ok(!existsSync(directory),'Uninstall retained '+directory)
 npm(['install','--offline','--ignore-scripts','--no-audit','--no-fund',...tarballs],consumer)
@@ -121,7 +205,7 @@ assert.equal(prepareAgain.status,0,prepareAgain.stderr)
 const reinstalledOutput=JSON.parse(prepareAgain.stdout),reinstalledManifest=JSON.parse(readFileSync(reinstalledOutput.manifestPath,'utf8'))
 verifyDeploymentAssets(reinstalledOutput.directory,reinstalledManifest,{packageManifestSHA256:manifest.packageManifestSHA256,expectedFiles:manifest.files})
 assert.deepEqual(reinstalledManifest,manifest,'Reinstall changed prepared deployment')
-return {workspace,consumer,output,files:manifest.files.length,packages:packageEvidence,typeResolution,reinstall:true,reinstalledDeploymentMatches:true,passed:true}
+return {workspace,consumer,output,nativeOnly,files:manifest.files.length,packages:packageEvidence,typeResolution,nativeBundleChecked,reinstall:true,reinstalledDeploymentMatches:true,passed:true}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href){
   if(!process.argv[2])throw Error('Usage: node scripts/test-sdk-packages.mjs PACKAGE_BUILD_DIRECTORY')

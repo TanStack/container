@@ -1,7 +1,7 @@
 import {WorkspaceFiles} from '../sandbox/files'
 import {traceInstallPhase} from './install-phase-trace'
 import {processDirectory} from '../sandbox/process-directory'
-import {installLockedPackages,PackageInstallCache} from './install'
+import {installLockedPackages,inspectBundledPackages,PackageInstallCache} from './install'
 import type {RuntimeLock,PackageIdentity} from './types'
 import {minimatch} from 'minimatch'
 import {maxSatisfying,satisfies,validRange} from 'semver'
@@ -36,6 +36,30 @@ function semverRange(spec:string,label:string){
   if(!range)throw unsupported('Unsupported non-semver '+label+': '+spec)
   return range
 }
+function registrySpec(name:string,spec:string){
+  if(!spec.startsWith('npm:')){
+    const range=validRange(spec)
+    if(!range)throw unsupported('Lockless dependency spec is unsupported for '+name+': '+spec)
+    return {name,range}
+  }
+  const alias=spec.slice(4),at=alias.lastIndexOf('@')
+  if(at<=0)throw unsupported('Unsupported npm alias for '+name+': '+spec)
+  const target=alias.slice(0,at)
+  if(!namePattern.test(target))throw unsupported('Unsupported npm alias for '+name+': '+spec)
+  return {name:target,range:semverRange(alias.slice(at+1),'npm alias for '+name)}
+}
+function bundledNames(pkg:RecordValue,regular:Record<string,string>,optional:Record<string,string>){
+  const declaration=pkg.bundleDependencies??pkg.bundledDependencies
+  if(declaration===undefined||declaration===false)return []
+  const names=declaration===true?Object.keys({...regular,...optional}):declaration
+  if(!Array.isArray(names)||names.some(name=>typeof name!=='string'||!namePattern.test(name)))
+    throw Error('Invalid bundled dependency declaration')
+  return [...new Set(names as string[])]
+}
+function topLevelBundleName(path:string){
+  const parts=path.slice('node_modules/'.length).split('/')
+  return parts[0]?.startsWith('@')?parts.slice(0,2).join('/'):parts[0]
+}
 function localPath(path:string){
   if(!path||path.includes('\\')||path.split('/').some(part=>!part||part==='.'||part==='..'||part==='node_modules')||path.includes(':'))throw Error('Invalid local package path: '+path)
   return '/'+path
@@ -56,16 +80,40 @@ function workspacePatternMatches(path:string,patterns:string[]){
   return matched
 }
 function registryMetadataURL(name:string){return 'https://registry.npmjs.org/'+(name.startsWith('@')?name.replace('/','%2f'):name)}
-const maxLocklessDirectDependencies=128,maxLocklessPackages=512,maxLocklessMetadataPackages=256,maxRegistryMetadataBytes=4*1024*1024,maxRegistryMetadataTotalBytes=32*1024*1024
+async function fetchRegistryMetadata(name:string,signal?:AbortSignal){
+  const url=registryMetadataURL(name)
+  for(let attempt=0;attempt<3;attempt++){
+    signal?.throwIfAborted()
+    let response:Response|undefined
+    try{
+      response=await fetch(url,{signal,headers:{accept:'application/vnd.npm.install-v1+json'}})
+    }catch(error){
+      if(signal?.aborted)throw error
+      if(attempt===2||!(error instanceof TypeError))throw error
+    }
+    if(response?.ok)return response
+    if(response&&((response.status!==429&&response.status<500)||attempt===2))
+      throw Error('Registry metadata request failed for '+name+': '+response.status)
+    await new Promise<void>((resolve,reject)=>{
+      const timer=setTimeout(()=>{signal?.removeEventListener('abort',abort);resolve()},100*(attempt+1))
+      const abort=()=>{clearTimeout(timer);reject(signal?.reason??new DOMException('Aborted','AbortError'))}
+      signal?.addEventListener('abort',abort,{once:true})
+      if(signal?.aborted)abort()
+    })
+  }
+  throw Error('Registry metadata request failed for '+name)
+}
+const maxLocklessDirectDependencies=128,maxLocklessPackages=512,maxLocklessMetadataPackages=256,maxRegistryMetadataBytes=16*1024*1024,maxRegistryMetadataTotalBytes=96*1024*1024
 /** Resolve a deterministic bounded npm v3 physical tree from registry metadata. */
 export async function resolveProjectLock(manifestText:string,signal?:AbortSignal,cache?:PackageInstallCache,onActivity?:()=>void){
-  await cache?.ready()
+  await cache?.ready(signal)
   onActivity?.()
   const manifest=record(JSON.parse(manifestText),'package.json')
   if(workspacePatterns(manifest.workspaces).length)throw unsupported('Lockless workspace installs are unsupported; generate package-lock.json with npm first')
   const requested={...dependencies(manifest.dependencies),...dependencies(manifest.devDependencies),...dependencies(manifest.optionalDependencies)}
   if(Object.keys(requested).length>maxLocklessDirectDependencies)throw unsupported('Lockless installs support at most '+maxLocklessDirectDependencies+' direct dependencies')
   const packages:Record<string,unknown>={'':structuredClone(manifest)}
+  const preferredRoots=new Map<string,{name:string;version:string}>()
   const metadataCache=new Map<string,RecordValue>()
   let metadataBytes=0
   const metadataFor=async(name:string)=>{
@@ -78,8 +126,7 @@ export async function resolveProjectLock(manifestText:string,signal?:AbortSignal
       try{const metadata=record(JSON.parse(cachedText),'cached registry metadata for '+name);metadataCache.set(name,metadata);onActivity?.();return metadata}
       catch{cache?.deleteMetadata(name)}
     }
-    const response=await fetch(registryMetadataURL(name),{signal,headers:{accept:'application/vnd.npm.install-v1+json'}})
-    if(!response.ok)throw Error('Registry metadata request failed for '+name+': '+response.status)
+    const response=await fetchRegistryMetadata(name,signal)
     const declared=Number(response.headers.get('content-length'))
     if(Number.isFinite(declared)&&declared>maxRegistryMetadataBytes)throw Error('Registry metadata exceeds '+maxRegistryMetadataBytes+' bytes for '+name)
     const metadataText=await response.text()
@@ -107,48 +154,86 @@ export async function resolveProjectLock(manifestText:string,signal?:AbortSignal
     return result
   }
   const installEdge=async(parent:string,name:string,spec:string,ancestry:Set<string>,optional=false,peer=false):Promise<string|undefined>=>{
-    const range=validRange(spec)
-    if(!range)throw unsupported('Lockless dependency spec is unsupported for '+name+': '+spec)
+    const {name:packageName,range}=registrySpec(name,spec)
     for(const candidate of ancestors(parent,name)){
       const existing=packages[candidate] as RecordValue|undefined
-      if(existing&&typeof existing.version==='string'&&satisfies(existing.version,range)){
-        const identity=name+'@'+existing.version
-        if(ancestry.has(identity))throw Error('Lockless dependency cycle includes '+[...ancestry,identity].join(' -> '))
-        return candidate
-      }
+      if(existing&&existing.name===packageName&&typeof existing.version==='string'&&satisfies(existing.version,range))return candidate
     }
     const rootPath='node_modules/'+name
-    let path=packages[rootPath]===undefined?rootPath:(parent?parent+'/node_modules/'+name:rootPath)
+    const preferred=preferredRoots.get(name)
+    const reservedForOtherVersion=preferred?.name===packageName&&!satisfies(preferred.version,range)
+    let path=packages[rootPath]===undefined&&!reservedForOtherVersion?rootPath:(parent?parent+'/node_modules/'+name:rootPath)
     if(packages[path]!==undefined){
       if(peer)throw Error('Lockless peer dependency conflict for '+name+'@'+spec)
       throw Error('Lockless dependency conflict for '+name+'@'+spec+' required by '+(parent||'/'))
     }
     const before=optional?structuredClone(packages):undefined
     try{
-      const metadata=await metadataFor(name),versions=record(metadata.versions,'registry versions for '+name)
-      const version=maxSatisfying(Object.keys(versions),range)
-      if(!version)throw Error('No registry version of '+name+' satisfies '+spec)
-      const identity=name+'@'+version
+      const metadata=await metadataFor(packageName),versions=record(metadata.versions,'registry versions for '+packageName)
+      const version=path===rootPath&&preferred?.name===packageName&&satisfies(preferred.version,range)
+        ?preferred.version:maxSatisfying(Object.keys(versions),range)
+      if(!version)throw Error('No registry version of '+packageName+' satisfies '+spec)
+      const identity=packageName+'@'+version
       if(ancestry.has(identity))throw Error('Lockless dependency cycle includes '+[...ancestry,identity].join(' -> '))
-      const selected=record(versions[version],'registry version '+name+'@'+version),dist=record(selected.dist,'registry distribution '+name+'@'+version)
-      if(selected.name!==name||selected.version!==version)throw Error('Registry package identity does not match '+name+'@'+version)
-      if(typeof dist.tarball!=='string'||typeof dist.integrity!=='string')throw Error('Registry package requires a tarball and integrity: '+name+'@'+version)
+      const selected=record(versions[version],'registry version '+packageName+'@'+version),dist=record(selected.dist,'registry distribution '+packageName+'@'+version)
+      if(selected.name!==packageName||selected.version!==version)throw Error('Registry package identity does not match '+packageName+'@'+version)
+      if(typeof dist.tarball!=='string'||typeof dist.integrity!=='string')throw Error('Registry package requires a tarball and integrity: '+packageName+'@'+version)
+      if(optional&&(selected.os||selected.cpu||selected.libc)&&!browserPortablePlatform(selected))return undefined
       if(Object.keys(packages).length-1>=maxLocklessPackages)throw unsupported('Lockless installs support at most '+maxLocklessPackages+' physical packages')
       const regular=dependencies(selected.dependencies),optionalDependencies=dependencies(selected.optionalDependencies)
       const peers=dependencies(selected.peerDependencies),peerMeta=selected.peerDependenciesMeta===undefined?{}:record(selected.peerDependenciesMeta,'peerDependenciesMeta')
-      packages[path]={name,version,resolved:dist.tarball,integrity:dist.integrity,dependencies:regular,optionalDependencies,
+      const declaredBundles=bundledNames(selected,regular,optionalDependencies)
+      packages[path]={name:packageName,version,resolved:dist.tarball,integrity:dist.integrity,dependencies:regular,optionalDependencies,
+        ...(declaredBundles.length?{bundleDependencies:declaredBundles}:{}),
         ...(Object.keys(peers).length?{peerDependencies:peers}:{}),...(Object.keys(peerMeta).length?{peerDependenciesMeta:peerMeta}:{}),
         ...(optional?{optional:true}:{}),...(selected.bin===undefined?{}:{bin:selected.bin}),...(selected.os===undefined?{}:{os:selected.os}),
         ...(selected.cpu===undefined?{}:{cpu:selected.cpu}),...(selected.libc===undefined?{}:{libc:selected.libc}),
         ...(selected.scripts===undefined?{}:{scripts:selected.scripts}),...(selected.hasInstallScript===undefined?{}:{hasInstallScript:selected.hasInstallScript})}
+      const bundledPaths:string[]=[]
+      if(declaredBundles.length){
+        const archives=await inspectBundledPackages(dist.tarball,dist.integrity,cache,signal,onActivity)
+        const declared=new Set(declaredBundles),found=new Set<string>()
+        for(const bundled of archives){
+          const top=topLevelBundleName(bundled.path)
+          if(!top||!declared.has(top))throw Error('Archive contains an undeclared bundled package: '+bundled.path)
+          if(bundled.path==='node_modules/'+top)found.add(top)
+          const bundledPath=path+'/'+bundled.path,manifest=bundled.manifest
+          packagePath(bundledPath)
+          if(typeof manifest.name!=='string'||!namePattern.test(manifest.name)||typeof manifest.version!=='string')
+            throw Error('Invalid bundled package identity: '+bundled.path)
+          if(packages[bundledPath]!==undefined)throw Error('Duplicate bundled package: '+bundled.path)
+          if(Object.keys(packages).length-1>=maxLocklessPackages)throw unsupported('Lockless installs support at most '+maxLocklessPackages+' physical packages')
+          packages[bundledPath]={name:manifest.name,version:manifest.version,inBundle:true,
+            dependencies:dependencies(manifest.dependencies),optionalDependencies:dependencies(manifest.optionalDependencies),
+            ...(optional?{optional:true}:{}),...(manifest.peerDependencies===undefined?{}:{peerDependencies:dependencies(manifest.peerDependencies)}),
+            ...(manifest.peerDependenciesMeta===undefined?{}:{peerDependenciesMeta:record(manifest.peerDependenciesMeta,'bundled peer metadata')}),
+            ...(manifest.os===undefined?{}:{os:manifest.os}),...(manifest.cpu===undefined?{}:{cpu:manifest.cpu}),
+            ...(manifest.libc===undefined?{}:{libc:manifest.libc})}
+          bundledPaths.push(bundledPath)
+        }
+        for(const bundled of declared)if(!found.has(bundled))throw Error('Declared bundled dependency is missing from archive: '+bundled)
+      }
       const next=new Set(ancestry).add(identity),scope=parentScope(path)
       for(const peerName of Object.keys(peers).sort()){
         const meta=peerMeta[peerName]===undefined?{}:record(peerMeta[peerName],'peer dependency metadata')
-        try{await installEdge(scope,peerName,peers[peerName],next,meta.optional===true,true)}
-        catch(error){if(meta.optional!==true)throw error}
+        if(meta.optional===true)continue
+        await installEdge(scope,peerName,peers[peerName],next,false,true)
       }
-      for(const dependency of Object.keys(regular).sort())await installEdge(path,dependency,regular[dependency],next)
+      for(const dependency of Object.keys(regular).sort()){
+        if(Object.hasOwn(optionalDependencies,dependency))continue
+        await installEdge(path,dependency,regular[dependency],next)
+      }
       for(const dependency of Object.keys(optionalDependencies).sort())await installEdge(path,dependency,optionalDependencies[dependency],next,true)
+      for(const bundledPath of bundledPaths){
+        const manifest=packages[bundledPath] as RecordValue
+        const bundledIdentity=new Set(next).add(String(manifest.name)+'@'+manifest.version)
+        const regular=dependencies(manifest.dependencies),optional=dependencies(manifest.optionalDependencies)
+        for(const dependency of Object.keys(regular).sort()){
+          if(Object.hasOwn(optional,dependency))continue
+          await installEdge(bundledPath,dependency,regular[dependency],bundledIdentity)
+        }
+        for(const dependency of Object.keys(optional).sort())await installEdge(bundledPath,dependency,optional[dependency],bundledIdentity,true)
+      }
       return path
     }catch(error){
       if(!optional)throw error
@@ -161,7 +246,26 @@ export async function resolveProjectLock(manifestText:string,signal?:AbortSignal
   for(const name of Object.keys(requested).sort()){
     await installEdge('',name,requested[name],new Set(),Object.hasOwn(rootOptional,name))
   }
-  await cache?.flush()
+  // Discover the complete graph before choosing shared root versions. A deep
+  // dependency visited first must not reserve an old root copy and force every
+  // newer consumer into a different module instance. Direct constraints win.
+  for(const [path,value] of Object.entries(packages)){
+    if(!path)continue
+    const entry=value as RecordValue
+    if(entry.inBundle||typeof entry.name!=='string'||typeof entry.version!=='string')continue
+    const name=path.slice(path.lastIndexOf('node_modules/')+'node_modules/'.length)
+    const direct=requested[name]===undefined?undefined:registrySpec(name,requested[name])
+    if(direct&&(direct.name!==entry.name||!satisfies(entry.version,direct.range)))continue
+    const previous=preferredRoots.get(name)
+    if(previous&&previous.name!==entry.name)continue
+    const version=maxSatisfying([entry.version,...(previous?[previous.version]:[])],'*')
+    if(version)preferredRoots.set(name,{name:entry.name,version})
+  }
+  for(const path of Object.keys(packages))if(path)delete packages[path]
+  for(const name of Object.keys(requested).sort()){
+    await installEdge('',name,requested[name],new Set(),Object.hasOwn(rootOptional,name))
+  }
+  await cache?.flush(signal)
   return JSON.stringify({name:manifest.name,version:manifest.version,lockfileVersion:3,packages})
 }
 function discoverWorkspaces(files:WorkspaceFiles,root:string,patterns:string[]){
@@ -307,13 +411,31 @@ export function planProjectInstall(manifestText:string,lockText:string,options:P
 
 /** Stage in the worker, then commit only if no host or guest edit changed the live tree. */
 const installCaches=new WeakMap<WorkspaceFiles,PackageInstallCache>()
+function sameInstallTree(before:ReturnType<WorkspaceFiles['snapshot']>,after:ReturnType<WorkspaceFiles['snapshot']>){
+  if(before.version!==5||after.version!==5)return false
+  const sameEntries=(a:Record<string,unknown>,b:Record<string,unknown>)=>
+    Object.keys(a).length===Object.keys(b).length&&Object.entries(a).every(([key,value])=>b[key]===value)
+  if(!sameEntries(before.fileModes,after.fileModes)||!sameEntries(before.directoryModes,after.directoryModes)||
+    !sameEntries(before.symlinks,after.symlinks)||before.directories.length!==after.directories.length||
+    before.directories.some(path=>!after.directories.includes(path)))return false
+  return Object.keys(before.files).length===Object.keys(after.files).length&&
+    Object.entries(before.files).every(([path,bytes])=>{
+      const next=after.files[path]
+      return next?.length===bytes.length&&bytes.every((byte,index)=>next[index]===byte)
+    })
+}
 export async function installProject(files:WorkspaceFiles,options:ProjectInstallOptions={},signal?:AbortSignal,runLifecycle?:(task:PackageLifecycleTask)=>Promise<void>,onActivity?:()=>void):Promise<ProjectInstallResult>{
   signal?.throwIfAborted()
   const revision=files.revision
   const root=processDirectory(files,options.cwd??'/').replace(/\/$/,'')
-  const text=(path:string)=>new TextDecoder().decode(files.readFileSync(path))
+  const staged=new WorkspaceFiles({},files.maxBytes,files.maxFiles)
+  try{
+  traceInstallPhase('workspace-staging',()=>staged.replace(files.snapshot()))
+  // Planning belongs to the transaction too. Reading live manifests updates
+  // their access times even when validation or a download later fails.
+  const text=(path:string)=>new TextDecoder().decode(staged.readFileSync(path))
   const manifestText=text(root+'/package.json')
-  const lockPath=files.existsSync(root+'/npm-shrinkwrap.json')?root+'/npm-shrinkwrap.json':files.existsSync(root+'/package-lock.json')?root+'/package-lock.json':''
+  const lockPath=staged.existsSync(root+'/npm-shrinkwrap.json')?root+'/npm-shrinkwrap.json':staged.existsSync(root+'/package-lock.json')?root+'/package-lock.json':''
   let cache=installCaches.get(files)
   if(!cache){cache=new PackageInstallCache();installCaches.set(files,cache)}
   const lockText=lockPath?text(lockPath):await resolveProjectLock(manifestText,signal,cache,onActivity)
@@ -322,7 +444,7 @@ export async function installProject(files:WorkspaceFiles,options:ProjectInstall
   const workspacePaths:string[]=[]
   if(plan.workspaces.length){
     const names=new Set<string>()
-    for(const path of discoverWorkspaces(files,root,plan.workspaces)){
+    for(const path of discoverWorkspaces(staged,root,plan.workspaces)){
       workspacePaths.push(path)
       const manifest=record(JSON.parse(text(root+path+'/package.json')),'workspace package.json')
       if(typeof manifest.name!=='string'||!namePattern.test(manifest.name))throw Error('Workspace requires a package name: '+path)
@@ -337,9 +459,6 @@ export async function installProject(files:WorkspaceFiles,options:ProjectInstall
   plan.result.ignoredScripts=plan.result.ignoredScripts.map(path=>root+path)
   plan.result.skippedPlatformPackages=plan.result.skippedPlatformPackages.map(path=>root+path)
   for(const alias of plan.result.packageAliases??[])alias.installPath=root+alias.installPath
-  const staged=new WorkspaceFiles({},files.maxBytes,files.maxFiles)
-  try{
-    traceInstallPhase('workspace-staging',()=>staged.replace(files.snapshot()))
     const localManifests=new Map<string,RecordValue>()
     for(const local of plan.locals){
       const path=root+local.installPath
@@ -473,7 +592,10 @@ export async function installProject(files:WorkspaceFiles,options:ProjectInstall
     signal?.throwIfAborted()
     const before=traceInstallPhase('workspace-commit',()=>{
       const previous=files.snapshot()
-      files.replace(staged.snapshot(),revision)
+      const next=staged.snapshot()
+      // A verified unchanged reinstall must not look like a filesystem edit.
+      // The revision check still runs, and lifecycle writes remain observable.
+      files.replace(sameInstallTree(previous,next)?previous:next,revision)
       return previous
     })
     try{for(const task of lifecycle){signal?.throwIfAborted();onActivity?.();await runLifecycle!(task);onActivity?.()}}catch(error){files.replace(before);throw error}

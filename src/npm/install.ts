@@ -1,18 +1,21 @@
 import { joinPath } from '../fs/path'
 import type { VirtualFileSystem } from '../fs/types'
 import { extractTarFiles } from './tar'
-import {startInstallPhase,traceInstallPhase} from './install-phase-trace'
+import {startInstallPhase,traceInstallPhase,traceAsyncInstallPhase} from './install-phase-trace'
 import type { InstallProgress, LockedPackage, RuntimeLock } from './types'
 import {deletePackageRecord,loadPackageRecords,packageCacheTimestamp,readPackageRecord,writePackageRecord} from './package-cache-storage'
+import {cancellableWait} from './cancellable-wait'
 
 interface CacheLimits {archiveBytes:number;archiveEntries:number;metadataBytes:number;metadataEntries:number}
-const defaultCacheLimits:CacheLimits={archiveBytes:32*1024*1024,archiveEntries:128,metadataBytes:16*1024*1024,metadataEntries:128}
+// Bound archive bytes independently from entry metadata, so normal dependency
+// graphs do not evict small packages while most of the byte budget is unused.
+const defaultCacheLimits:CacheLimits={archiveBytes:32*1024*1024,archiveEntries:1024,metadataBytes:16*1024*1024,metadataEntries:128}
 interface CacheEntry<T>{value:T;bytes:number;used:number}
 export class PackageInstallCache {
   readonly #limits:CacheLimits
   readonly #archives=new Map<string,CacheEntry<Uint8Array>>()
   readonly #metadata=new Map<string,CacheEntry<string>>()
-  readonly #pendingArchives=new Map<string,Promise<Uint8Array>>()
+  readonly #pendingArchives=new Map<string,{promise:Promise<Uint8Array>;controller:AbortController;users:number}>()
   readonly #writes=new Set<Promise<void>>()
   readonly #ready:Promise<void>
   #clock=0
@@ -27,8 +30,12 @@ export class PackageInstallCache {
       if(record.kind==='metadata')this.#put(this.#metadata,record.key,record.value,record.bytes,this.#limits.metadataBytes,this.#limits.metadataEntries)
     }
   }
-  ready(){return this.#ready}
-  async flush(){while(this.#writes.size)await Promise.allSettled([...this.#writes])}
+  ready(signal?:AbortSignal){return cancellableWait(this.#ready,signal)}
+  async flush(signal?:AbortSignal){
+    signal?.throwIfAborted()
+    while(this.#writes.size)await cancellableWait(Promise.allSettled([...this.#writes]),signal)
+    signal?.throwIfAborted()
+  }
   #persist(operation:Promise<void>){this.#writes.add(operation);void operation.finally(()=>this.#writes.delete(operation)).catch(()=>{})}
   #get<T>(entries:Map<string,CacheEntry<T>>,key:string){const entry=entries.get(key);if(entry)entry.used=++this.#clock;return entry?.value}
   #put<T>(entries:Map<string,CacheEntry<T>>,key:string,value:T,bytes:number,maxBytes:number,maxEntries:number){
@@ -51,28 +58,59 @@ export class PackageInstallCache {
     this.#put(this.#metadata,name,text,bytes,this.#limits.metadataBytes,this.#limits.metadataEntries)
     this.#persist(writePackageRecord({id:'metadata:'+name,version:1,kind:'metadata',key:name,value:text,bytes,used:packageCacheTimestamp()},this.#limits.metadataBytes,this.#limits.metadataEntries).catch(()=>{}))
   }
-  async archive(integrity:string,load:()=>Promise<Uint8Array>){
+  async archive(integrity:string,load:(signal?:AbortSignal)=>Promise<Uint8Array>,signal?:AbortSignal){
+    signal?.throwIfAborted()
     const hit=this.#get(this.#archives,integrity)
     if(hit){
       if(integrity.startsWith('sha512-'))void writePackageRecord({id:'archive:'+integrity,version:1,kind:'archive',key:integrity,value:Uint8Array.from(hit).buffer,bytes:hit.length,used:packageCacheTimestamp()},this.#limits.archiveBytes,this.#limits.archiveEntries).catch(()=>{})
       return hit
     }
-    const pending=this.#pendingArchives.get(integrity)
-    if(pending)return pending
+    let pending=this.#pendingArchives.get(integrity)
+    if(!pending){
+    const controller=new AbortController()
     const operation=(async()=>{
-      const stored=await readPackageRecord('archive',integrity).catch(()=>undefined)
+      const stored=await traceAsyncInstallPhase('archive-cache-read',()=>readPackageRecord('archive',integrity,controller.signal)).catch(error=>{controller.signal.throwIfAborted();return undefined})
+      controller.signal.throwIfAborted()
       if(stored?.kind==='archive'){
         const value=new Uint8Array(stored.value)
-        try{await verifyIntegrity(value,integrity);this.#put(this.#archives,integrity,value,value.length,this.#limits.archiveBytes,this.#limits.archiveEntries);return value}
-        catch{await deletePackageRecord('archive',integrity).catch(()=>{})}
+        try{await verifyIntegrity(value,integrity);controller.signal.throwIfAborted();this.#put(this.#archives,integrity,value,value.length,this.#limits.archiveBytes,this.#limits.archiveEntries);return value}
+        catch{
+          controller.signal.throwIfAborted()
+          await deletePackageRecord('archive',integrity,controller.signal).catch(()=>{controller.signal.throwIfAborted()})
+        }
       }
-      const value=await load()
+      const value=await traceAsyncInstallPhase('archive-download',()=>load(controller.signal))
+      controller.signal.throwIfAborted()
       this.#put(this.#archives,integrity,value,value.length,this.#limits.archiveBytes,this.#limits.archiveEntries)
-      if(integrity.startsWith('sha512-'))await writePackageRecord({id:'archive:'+integrity,version:1,kind:'archive',key:integrity,value:Uint8Array.from(value).buffer,bytes:value.length,used:packageCacheTimestamp()},this.#limits.archiveBytes,this.#limits.archiveEntries).catch(()=>{})
+      if(integrity.startsWith('sha512-'))await traceAsyncInstallPhase('archive-cache-write',()=>writePackageRecord({id:'archive:'+integrity,version:1,kind:'archive',key:integrity,value:Uint8Array.from(value).buffer,bytes:value.length,used:packageCacheTimestamp()},this.#limits.archiveBytes,this.#limits.archiveEntries,controller.signal)).catch(()=>{controller.signal.throwIfAborted()})
       return value
     })()
-    this.#pendingArchives.set(integrity,operation)
-    try{return await operation}finally{this.#pendingArchives.delete(integrity)}
+    pending={promise:operation,controller,users:0}
+    this.#pendingArchives.set(integrity,pending)
+    const entry=pending
+    void operation.finally(()=>{if(this.#pendingArchives.get(integrity)===entry)this.#pendingArchives.delete(integrity)}).catch(()=>{})
+    }
+    const entry=pending
+    entry.users++
+    return new Promise<Uint8Array>((resolve,reject)=>{
+      let settled=false
+      const finish=(failed:boolean,error:unknown,value?:Uint8Array)=>{
+        if(settled)return
+        settled=true
+        signal?.removeEventListener('abort',abort)
+        entry.users--
+        if(failed)reject(error);else resolve(value!)
+      }
+      const abort=()=>{
+        finish(true,signal!.reason)
+        if(entry.users===0){
+          if(this.#pendingArchives.get(integrity)===entry)this.#pendingArchives.delete(integrity)
+          entry.controller.abort(signal!.reason)
+        }
+      }
+      signal?.addEventListener('abort',abort,{once:true})
+      entry.promise.then(value=>finish(false,undefined,value),error=>finish(true,error))
+    })
   }
 }
 
@@ -153,6 +191,54 @@ async function decompressGzip(archive: Uint8Array, signal?: AbortSignal,onActivi
   return readBounded(decompressed, 64 * 1024 * 1024, signal,onActivity)
 }
 
+async function loadVerifiedArchive(resolved:string,integrity:string,signal?:AbortSignal,cache?:PackageInstallCache,onActivity?:()=>void){
+  const url=new URL(resolved)
+  if(url.protocol!=='https:'||url.hostname!=='registry.npmjs.org'||url.port||url.username||url.password||url.hash)
+    throw Error('Package downloads are restricted to https://registry.npmjs.org')
+  const load=async(sharedSignal=signal)=>{
+    let response:Response
+    try{response=await fetch(resolved,{signal:sharedSignal,credentials:'omit',redirect:'error'})}
+    catch(error){
+      sharedSignal?.throwIfAborted()
+      throw new Error(`Could not download ${url.pathname}: ${String(error)}`,{cause:error})
+    }
+    if(!response.ok){
+      const error=Error(`Could not download ${url.pathname} (${response.status})`)
+      // Failed bodies still own transport resources. Start cleanup without
+      // allowing its acknowledgement to replace or delay the HTTP failure.
+      void response.body?.cancel(error).catch(()=>{})
+      throw error
+    }
+    if(!response.body)throw Error('Package download has no body')
+    let archive:Uint8Array
+    try{archive=await readBounded(response.body,16*1024*1024,sharedSignal,onActivity)}
+    catch(error){
+      sharedSignal?.throwIfAborted()
+      throw new Error(`Could not read archive ${url.pathname}: ${String(error)}`,{cause:error})
+    }
+    await verifyIntegrity(archive,integrity)
+    onActivity?.()
+    return archive
+  }
+  return cache?cache.archive(integrity,load,signal):load()
+}
+
+/** Inspect package manifests already included in a registry tarball. */
+export async function inspectBundledPackages(resolved:string,integrity:string,cache?:PackageInstallCache,signal?:AbortSignal,onActivity?:()=>void){
+  const archive=await loadVerifiedArchive(resolved,integrity,signal,cache,onActivity)
+  const files=extractTarFiles(await traceAsyncInstallPhase('gzip-decompression',()=>decompressGzip(archive,signal,onActivity)))
+  const bundled:{path:string;manifest:Record<string,unknown>}[]=[]
+  for(const file of files){
+    if(!file.path.startsWith('node_modules/')||!file.path.endsWith('/package.json'))continue
+    const path=file.path.slice(0,-'/package.json'.length)
+    const manifest=JSON.parse(new TextDecoder().decode(file.contents)) as unknown
+    if(!manifest||typeof manifest!=='object'||Array.isArray(manifest))throw Error('Invalid bundled package manifest: '+path)
+    bundled.push({path,manifest:manifest as Record<string,unknown>})
+    if(bundled.length>128)throw Error('Package archive contains too many bundled packages')
+  }
+  return bundled.sort((a,b)=>a.path.localeCompare(b.path))
+}
+
 async function installPackage(
   fs: VirtualFileSystem,
   lockedPackage: LockedPackage,
@@ -160,19 +246,10 @@ async function installPackage(
   cache?:PackageInstallCache,
   onActivity?:()=>void,
 ): Promise<void> {
-  const load=async()=>{
-    const response = await fetch(lockedPackage.resolved, { signal, credentials: 'omit', redirect: 'error' })
-    if (!response.ok) throw new Error(`Could not download ${lockedPackage.installPath} (${response.status})`)
-    if (!response.body) throw new Error('Package download has no body')
-    const archive = await readBounded(response.body, 16 * 1024 * 1024, signal,onActivity)
-    await verifyIntegrity(archive, lockedPackage.integrity)
-    onActivity?.()
-    return archive
-  }
-  const archive=cache?await cache.archive(lockedPackage.integrity,load):await load()
+  const archive=await loadVerifiedArchive(lockedPackage.resolved,lockedPackage.integrity,signal,cache,onActivity)
   onActivity?.()
   signal?.throwIfAborted()
-  const tar = await decompressGzip(archive, signal,onActivity)
+  const tar = await traceAsyncInstallPhase('gzip-decompression',()=>decompressGzip(archive, signal,onActivity))
   const files=traceInstallPhase('tar-extraction',()=>extractTarFiles(tar))
   const finishWrites=startInstallPhase('package-file-write')
   try {
@@ -191,6 +268,33 @@ async function installPackage(
   } catch(error) {
     finishWrites('error')
     throw error
+  }
+}
+
+async function linkPackageExecutables(fs:VirtualFileSystem,lock:RuntimeLock){
+  if(!fs.symlink)return
+  for(const pkg of lock.packages.flatMap(item=>[item,...item.bundledPackages??[]])){
+    const marker=pkg.installPath.lastIndexOf('/node_modules/')
+    if(marker<0)continue
+    const manifest=JSON.parse(await fs.readText(joinPath(pkg.installPath,'package.json'))) as
+      {name?:unknown;bin?:unknown}
+    if(!manifest.bin)continue
+    const bins=typeof manifest.bin==='string'
+      ?{[String(manifest.name??pkg.name??'').split('/').pop()!]:manifest.bin}
+      :manifest.bin
+    if(!bins||typeof bins!=='object'||Array.isArray(bins))
+      throw Error('Invalid package executable declaration: '+pkg.installPath)
+    for(const [name,target] of Object.entries(bins)){
+      if(!/^[a-zA-Z0-9_~-][a-zA-Z0-9._~-]*$/.test(name)||typeof target!=='string'||!target||
+        target.startsWith('/')||target.includes('\\')||target.split('/').includes('..'))
+        throw Error('Invalid package executable: '+name)
+      const source=joinPath(pkg.installPath,target)
+      if(!(await (fs.isFile?.(source)??fs.exists(source))))
+        throw Error('Package executable is missing: '+source)
+      await fs.chmod?.(source,0o755)
+      const executable=joinPath(pkg.installPath.slice(0,marker), 'node_modules/.bin',name)
+      if(!(await fs.exists(executable)))await fs.symlink(source,executable)
+    }
   }
 }
 
@@ -224,5 +328,6 @@ export async function installLockedPackages(
     const outcomes=await Promise.allSettled(Array.from({ length: concurrency }, () => worker()))
     const failure=outcomes.find((result):result is PromiseRejectedResult=>result.status==='rejected')
     if(failure)throw controller.signal.reason??failure.reason
+    await linkPackageExecutables(fs,lock)
   }finally{signal?.removeEventListener('abort',abort)}
 }

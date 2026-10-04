@@ -1,0 +1,9 @@
+{
+  "name": "@tanstack/browser-sandbox-experimental",
+  "version": "0.1.0-alpha.0",
+  "type": "module",
+  "license": "MIT",
+  "repository": {"type": "git", "url": "https://github.com/TanStack/container.git", "directory": "packages/browser-sandbox"},
+  "publishConfig": {"access": "public", "directory": "dist", "tag": "alpha"},
+  "dependencies": {"@tanstack/browser-sandbox-runtime-experimental": "0.1.0-alpha.0"}
+}

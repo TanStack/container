@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/TanStack/router.git",
+  "revision": "6f882b7dae8870e0f51791ec89015f75c74e4c9b",
+  "packagePath": "examples/react/start-counter/package.json",
+  "sourceSHA256": "b9d633c63fad9dd1e17b2bf326659b560a584dd8bf4c74b06bca32a5dc2a1ff5",
+  "npmLockSHA256": "ea457abcf2172a13edc280b4f65cdb06d7c5c28a72f9fd1c5d16851300bde748",
+  "note": "Package manifest copied without dependency substitutions. npm lock resolves its declared ranges independently of the router monorepo lock."
+}

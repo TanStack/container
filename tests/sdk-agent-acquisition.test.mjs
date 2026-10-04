@@ -8,10 +8,54 @@ const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done});
 const options={skip:!process.env.SDK_OUTPUT,timeout:5000}
 const sdk=()=>import(pathToFileURL(resolve(process.env.SDK_OUTPUT,'index.js')).href)
 
+test('packaged agent does not dispatch queued writes after close',options,async()=>{
+  const {AgentSession}=await sdk()
+  const blocked=deferred()
+  let writes=0,closed=0
+  const session=new AgentSession({
+    openFileSession:async()=>({call:()=>blocked.promise,close:async()=>{}}),
+    writeFile:async()=>{writes++},close:()=>{closed++},shutdown:Promise.resolve(),
+  })
+  const active=session.mkdir({path:'/first'})
+  await setImmediate()
+  const queued=session.write({path:'/queued',text:'not written'})
+  const rejection=assert.rejects(queued,/Agent session closed/)
+  await session.close();blocked.resolve();await active;await rejection
+  assert.equal(writes,0);assert.equal(closed,1)
+})
+
+test('packaged agent drains exhausted output and omits a cut Unicode character',options,async()=>{
+  const {AgentSession}=await sdk()
+  let reads=0
+  const session=new AgentSession({spawn:async()=>({
+    next:async()=>reads++<1000?{type:'stdout',bytes:new TextEncoder().encode('é')}:{type:'exit',code:0,signal:null},
+    wait:async()=>({exitCode:0,signal:null}),dispose:async()=>{},kill:async()=>true,
+  })},{maxOutputBytes:1})
+  assert.deepEqual(await session.run({command:'node'}),{stdout:'',stderr:'',status:0,signal:null,truncated:true})
+  assert.equal(reads,1001)
+})
+
+test('packaged agent rejects failed active cancellation and ignores late output',options,async()=>{
+  const {AgentSession}=await sdk()
+  const next=deferred(),failure=Error('Cancellation transport failed')
+  let disposed=0,reads=0,waits=0
+  const session=new AgentSession({spawn:async()=>({
+    next:()=>{reads++;return next.promise},kill:async()=>{throw failure},
+    dispose:async()=>{disposed++},wait:async()=>{waits++;return {exitCode:0,signal:null}},
+  })})
+  const controller=new AbortController()
+  const running=session.run({command:'node'},controller.signal)
+  const rejection=assert.rejects(running,error=>error===failure)
+  await setImmediate();assert.equal(reads,1);controller.abort()
+  await rejection;assert.equal(disposed,1);assert.equal(waits,0)
+  next.resolve({type:'stdout',bytes:new TextEncoder().encode('late output')})
+  await setImmediate();assert.equal(reads,1);assert.equal(waits,0);assert.equal(disposed,1)
+})
+
 test('packaged agent does not dispatch an already-cancelled restore',options,async()=>{
   const {AgentSession}=await sdk()
   let restoreCalls=0
-  const session=new AgentSession({}, {kernel:{async restore(){restoreCalls++}}})
+  const session=new AgentSession({async restore(){restoreCalls++}})
   const controller=new AbortController(),reason=Error('cancel restore')
   controller.abort(reason)
   await assert.rejects(session.restore({snapshot:{files:{}}},controller.signal),error=>error===reason)
@@ -22,10 +66,10 @@ test('packaged agent retains a cancelled file acquisition until cleanup',options
   const {AgentSession}=await sdk()
   const started=deferred(),opened=deferred(),closed=deferred()
   let settled=false,closeCalls=0,writeCalls=0
-  const session=new AgentSession({}, {kernel:{
+  const session=new AgentSession({
     openFileSession(){started.resolve();return opened.promise},
     async writeFile(){writeCalls++},
-  }})
+  })
   const controller=new AbortController(),reason=Error('cancel file acquisition')
   const result=session.mkdir({path:'/first'},controller.signal).catch(error=>{settled=true;return error})
   await started.promise
@@ -49,7 +93,7 @@ test('packaged agent kills and disposes a process acquired after cancellation',o
   const {AgentSession}=await sdk()
   const opened=deferred(),killed=deferred(),disposed=deferred()
   const events=[]
-  const session=new AgentSession({}, {kernel:{spawn(){return opened.promise}}})
+  const session=new AgentSession({spawn(){return opened.promise}})
   const controller=new AbortController(),reason=Error('cancel process acquisition')
   let settled=false
   const result=session.run({command:'node'},controller.signal).catch(error=>{settled=true;return error})

@@ -16,6 +16,7 @@ const fiberProfiles=new Set([
   'experimental-fibers-simd-lazy-initializers-o2-iterative-calls-module-import-exports-assignments-cooperative-heap-loops-segmented-interpreter-batched-native-utf8',
   'experimental-fibers-simd-lazy-initializers-o2-iterative-calls-module-import-exports-assignments-cooperative-heap-loops-segmented-interpreter-batched-native-utf8-buffer',
   'experimental-fibers-simd-lazy-initializers-o2-iterative-calls-module-import-exports-assignments-cooperative-heap-loops-segmented-interpreter-batched-native-utf8-guest-sampling',
+  'experimental-fibers-simd-lazy-initializers-o2-iterative-calls-module-import-exports-assignments-cooperative-heap-loops-segmented-interpreter-batched-native-utf8-buffer-guest-sampling',
 ])
 const supportedProfiles=new Set(['default','sync-o2','sync-o2-vm-modules',...fiberProfiles])
 const compilerPolicy=Object.freeze<ExperimentalCompilerPolicy>({maxMemoryPages:1024,timeoutMs:30000,lifetime:'session'})

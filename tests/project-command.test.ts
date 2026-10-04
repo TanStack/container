@@ -12,10 +12,18 @@ const fixture=(scripts:Record<string,string>={})=>{
 }
 
 describe('declared project commands',()=>{
-  it.each(['npm install','npm ci --ignore-scripts --no-audit','pnpm install --frozen-lockfile','yarn install','bun i --silent'])('routes %s through the transactional SDK installer',async command=>{
+  it.each(['npm install','npm ci --ignore-scripts --no-audit','pnpm install','yarn install','bun i --silent'])('routes %s through the transactional SDK installer',async command=>{
     const {kernel,install}=fixture()
     await expect(installProjectCommand(kernel,command,{cwd:'/project'})).resolves.toMatchObject({installed:3})
     expect(install).toHaveBeenCalledWith({cwd:'/project',...(command.includes('--ignore-scripts')?{ignoreScripts:true}:{})},undefined)
+  })
+
+  it.each(['npm','pnpm','yarn','bun'].flatMap(manager=>
+    ['--offline','--prefer-offline','--frozen-lockfile'].map(flag=>`${manager} install ${flag}`)
+  ))('rejects unsupported install semantics before installing: %s',async command=>{
+    const {kernel,install}=fixture()
+    await expect(installProjectCommand(kernel,command)).rejects.toMatchObject({code:'ERR_UNSUPPORTED_OPERATION'})
+    expect(install).not.toHaveBeenCalled()
   })
 
   it('rejects package mutation commands that the installer cannot represent',async()=>{

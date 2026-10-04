@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "runtimes": [
+    {
+      "vite": "8.3.1",
+      "rolldown": "1.2.11",
+      "vitePackage": "node_modules/vite8-browser",
+      "rolldownPackage": "node_modules/@rolldown/browser"
+    },
+    {
+      "vite": "8.3.2",
+      "rolldown": "1.2.12",
+      "vitePackage": "tests/fixtures/native-runtime-832/node_modules/vite",
+      "rolldownPackage": "tests/fixtures/native-runtime-832/node_modules/@rolldown/browser"
+    }
+  ]
+}

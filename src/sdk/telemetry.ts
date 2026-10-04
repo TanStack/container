@@ -1,4 +1,6 @@
+import type {NativeOwnerResourceSnapshot} from '../native/owner-resources'
 export type SandboxTelemetryEvent=
+  | ({sequence:number;type:'resources.native-owner'}&NativeOwnerResourceSnapshot)
   | {sequence:number;type:'process.start';command:string;args:string[];cwd?:string}
   | {sequence:number;type:'process.exit';status:number|null;signal:string|null;truncated:boolean}
   | {sequence:number;type:'file.write';path:string;bytes:number}

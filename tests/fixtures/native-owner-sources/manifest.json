@@ -1,0 +1,48 @@
+{
+  "format": 1,
+  "repository": "https://github.com/TanStack/router.git",
+  "revision": "b839f47027956f71ed2db51f436701801addb1d6",
+  "licenseSHA256": "a405ee70c632bb938acb7ac5f210e814409b3760ea9d2329d8ed8ffcfd11a0e7",
+  "examples": [
+    {
+      "kind": "react",
+      "path": "start-counter",
+      "fixture": "native-real-counter",
+      "snapshot": "react-start-counter.json",
+      "sha256": "b7888faaa86495b1527ed6a6c964772acb9ae4778614c8389ea40017bff56b87",
+      "npmLockSHA256": "8d25fd05c5f4302365a20e690ccdbd9c6ec85502959303a91322f108c8ddc5cb"
+    },
+    {
+      "kind": "react",
+      "path": "start-basic",
+      "fixture": "native-real-start-basic",
+      "snapshot": "react-start-basic.json",
+      "sha256": "9fcae9fe8b409201d908304cdcc4a2878b108677f61886b28fcdb30658fa675f",
+      "npmLockSHA256": "4bf05bb589966c0c46cae835cc520891bc6dc8a33700bc451f497fda30e2cd43"
+    },
+    {
+      "kind": "react",
+      "path": "start-streaming-data-from-server-functions",
+      "fixture": "native-real-start-streaming",
+      "snapshot": "react-start-streaming-data-from-server-functions.json",
+      "sha256": "0a916841d0c82918a23f606c96fd85bce9840cde7eb8a094bdc43b79ac73a075",
+      "npmLockSHA256": "63fb022b1d76a704acbffa5d09f8027a6eaf9ebeeaa87142704f77782012a3bf"
+    },
+    {
+      "kind": "react",
+      "path": "basic-ssr-file-based",
+      "fixture": "native-real-router-ssr",
+      "snapshot": "react-basic-ssr-file-based.json",
+      "sha256": "a5a24a9d8eecfcf72895395b8d70f886b2635fb7533757ca7bf04d196a30316a",
+      "npmLockSHA256": "4b37f0f2079cad14fabf5da14a16335bb1d7ef2a2db2894d9a1951ecf749cc5b"
+    },
+    {
+      "kind": "solid",
+      "path": "start-counter",
+      "fixture": "native-real-solid-counter",
+      "snapshot": "solid-start-counter.json",
+      "sha256": "2242a9d73e73b652b962a98615cb324db503faa58a29cf88600abde81a71ed15",
+      "npmLockSHA256": "6113d7192cabab8944ee716438afcd14afc86d5594f73f9691579cc0cfa01881"
+    }
+  ]
+}

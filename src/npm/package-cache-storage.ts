@@ -18,14 +18,23 @@ function valid(record:unknown):record is StoredPackageRecord{
     typeof value.used==='number'&&Number.isFinite(value.used)&&
     (value.kind==='archive'?value.value instanceof ArrayBuffer&&value.value.byteLength===value.bytes:typeof value.value==='string'&&new TextEncoder().encode(value.value).length===value.bytes)
 }
-async function databaseOperation<T>(run:(store:IDBObjectStore,resolve:(value:T)=>void)=>void):Promise<T>{
-  const db=await openSandboxDatabase()
+async function databaseOperation<T>(run:(store:IDBObjectStore,resolve:(value:T)=>void)=>void,signal?:AbortSignal):Promise<T>{
+  const db=await openSandboxDatabase(signal)
   try{return await new Promise<T>((resolve,reject)=>{
+    signal?.throwIfAborted()
     const transaction=db.transaction('package-cache','readwrite'),store=transaction.objectStore('package-cache')
     let result:T,settled=false
-    run(store,value=>{result=value;settled=true})
-    transaction.oncomplete=()=>settled?resolve(result!):reject(new Error('Package cache operation did not produce a result'))
-    transaction.onabort=()=>reject(transaction.error??new Error('Package cache transaction aborted'))
+    const cleanup=()=>signal?.removeEventListener('abort',abort)
+    const abort=()=>{
+      try{transaction.abort()}catch{}
+      cleanup()
+      reject(signal!.reason)
+    }
+    transaction.oncomplete=()=>{cleanup();settled?resolve(result!):reject(new Error('Package cache operation did not produce a result'))}
+    transaction.onabort=()=>{cleanup();reject(signal?.aborted?signal.reason:transaction.error??new Error('Package cache transaction aborted'))}
+    signal?.addEventListener('abort',abort,{once:true})
+    try{run(store,value=>{result=value;settled=true})}
+    catch(error){cleanup();try{transaction.abort()}catch{}reject(error)}
   })}finally{db.close()}
 }
 export async function loadPackageRecords(kind:'archive'|'metadata'):Promise<StoredPackageRecord[]>{
@@ -42,7 +51,8 @@ export async function loadPackageRecords(kind:'archive'|'metadata'):Promise<Stor
     }
   })
 }
-export async function readPackageRecord(kind:'archive'|'metadata',key:string):Promise<StoredPackageRecord|undefined>{
+export async function readPackageRecord(kind:'archive'|'metadata',key:string,signal?:AbortSignal):Promise<StoredPackageRecord|undefined>{
+  signal?.throwIfAborted()
   if(!available())return undefined
   return databaseOperation((store,resolve)=>{
     const request=store.get(kind+':'+key)
@@ -51,13 +61,15 @@ export async function readPackageRecord(kind:'archive'|'metadata',key:string):Pr
       if(request.result!==undefined)store.delete(kind+':'+key)
       resolve(undefined)
     }
-  })
+  },signal)
 }
-export async function deletePackageRecord(kind:'archive'|'metadata',key:string){
+export async function deletePackageRecord(kind:'archive'|'metadata',key:string,signal?:AbortSignal){
+  signal?.throwIfAborted()
   if(!available())return
-  await databaseOperation<void>((store,resolve)=>{store.delete(kind+':'+key);resolve()})
+  await databaseOperation<void>((store,resolve)=>{store.delete(kind+':'+key);resolve()},signal)
 }
-export async function writePackageRecord(record:StoredPackageRecord,maxBytes:number,maxEntries:number){
+export async function writePackageRecord(record:StoredPackageRecord,maxBytes:number,maxEntries:number,signal?:AbortSignal){
+  signal?.throwIfAborted()
   if(!available()||record.bytes>maxBytes||maxEntries<1)return
   await databaseOperation<void>((store,resolve)=>{
     store.put(record)
@@ -80,5 +92,5 @@ export async function writePackageRecord(record:StoredPackageRecord,maxBytes:num
       while(records.length>maxEntries||bytes>maxBytes){const oldest=records.shift();if(!oldest)break;bytes-=oldest.bytes;store.delete(oldest.id)}
       resolve()
     }
-  })
+  },signal)
 }

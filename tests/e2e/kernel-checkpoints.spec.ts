@@ -14,6 +14,11 @@ test('kernel checkpoints persist and restore without returning workspace bytes t
         directories:['/src','/empty'],symlinks:{'/entry.ts':'/src/main.ts'},
         fileModes:{'/src/large.bin':0o600,'/src/main.ts':0o644},
         directoryModes:{'/':0o755,'/src':0o750,'/empty':0o700},
+        fileTimes:{'/src/large.bin':{atimeMs:1700000000000,mtimeMs:1700000001000},
+          '/src/main.ts':{atimeMs:1700000002000,mtimeMs:1700000003000}},
+        directoryTimes:{'/':{atimeMs:1700000004000,mtimeMs:1700000005000},
+          '/src':{atimeMs:1700000006000,mtimeMs:1700000007000},
+          '/empty':{atimeMs:1700000008000,mtimeMs:1700000009000}},
       })
       const metadata=await kernel.saveCheckpoint('kernel-owned-e2e')
       return {metadata,lookup:await kernel.checkpointMetadata('kernel-owned-e2e')}
@@ -47,6 +52,8 @@ test('kernel checkpoints persist and restore without returning workspace bytes t
         symlinks:'symlinks' in snapshot?snapshot.symlinks:{},
         fileModes:'fileModes' in snapshot?snapshot.fileModes:{},
         directoryModes:'directoryModes' in snapshot?snapshot.directoryModes:{},
+        fileTimes:'fileTimes' in snapshot?snapshot.fileTimes:{},
+        directoryTimes:'directoryTimes' in snapshot?snapshot.directoryTimes:{},
       }
     }finally{kernel.close()}
   })
@@ -55,6 +62,11 @@ test('kernel checkpoints persist and restore without returning workspace bytes t
     large:[2*1024*1024,42,42],directories:['/empty','/src'],symlinks:{'/entry.ts':'/src/main.ts'},
     fileModes:{'/src/large.bin':0o600,'/src/main.ts':0o644},
     directoryModes:{'/':0o755,'/src':0o750,'/empty':0o700},
+    fileTimes:{'/src/large.bin':{atimeMs:1700000000000,mtimeMs:1700000001000},
+      '/src/main.ts':{atimeMs:1700000002000,mtimeMs:1700000003000}},
+    directoryTimes:{'/':{atimeMs:1700000004000,mtimeMs:1700000005000},
+      '/src':{atimeMs:1700000006000,mtimeMs:1700000007000},
+      '/empty':{atimeMs:1700000008000,mtimeMs:1700000009000}},
   })
   expect(restored.replacement.createdAt).toBe(restored.metadata.createdAt)
   expect(restored.replacement.updatedAt).toBeGreaterThanOrEqual(restored.metadata.updatedAt)
