@@ -3,12 +3,49 @@ import assert from 'node:assert/strict'
 import {mkdtempSync,mkdirSync,readFileSync,writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {checkNativeSDK,nativeSDKCheckEnvironment,readNativeSDKCheckAcceptance,readNativeSDKCheckDirectories,readNativeSDKCheckCommandLifecycles} from '../scripts/check-native-sdk.mjs'
+import {checkNativeSDK,nativeSDKCheckEnvironment,runNativeSDKCheckCommand,readNativeSDKCheckAcceptance,readNativeSDKCheckDirectories,readNativeSDKCheckCommandLifecycles} from '../scripts/check-native-sdk.mjs'
 
 const rows=()=>['chromium','firefox','webkit'].map(browser=>({browser,passed:true,examples:5,version:'0.0.0',
   examplesRevision:'f'.repeat(40),runners:{'tests/native-owner-sdk.test.mjs':'a'.repeat(64)},
   sdkManifestSHA256:'a'.repeat(64),runtimeManifestSHA256:'b'.repeat(64),deploymentManifestSHA256:'c'.repeat(64),examplesManifestSHA256:'d'.repeat(64)}))
 const output=entries=>entries.map(row=>'NATIVE_RELEASE_ACCEPTANCE '+JSON.stringify(row)).join('\n')
+
+test('captured native checks retain ordinary success output and return the original result',()=>{
+  const args=['original-script.mjs'],options={stdio:'pipe',encoding:'utf8',maxBuffer:64*1024*1024}
+  const stdout=[],stderr=[]
+  const result=runNativeSDKCheckCommand((command,actualArgs,actualOptions)=>{
+    assert.equal(command,process.execPath);assert.equal(actualArgs,args);assert.equal(actualOptions,options)
+    return 'original success output\n'
+  },args,options,{stdout:bytes=>stdout.push(bytes),stderr:bytes=>stderr.push(bytes)})
+  assert.equal(result,'original success output\n')
+  assert.deepEqual(stdout,[result]);assert.deepEqual(stderr,[])
+})
+test('captured native failures keep both output streams and the original error',()=>{
+  for(const binary of [false,true]){
+    const stdout=[],stderr=[]
+    const error=Object.assign(Error('original failure'),{status:1,signal:null,
+      stdout:binary?Buffer.from('completed checks\n'):'completed checks\n',
+      stderr:binary?Buffer.from('original diagnostic\n'):'original diagnostic\n'})
+    assert.throws(()=>runNativeSDKCheckCommand(()=>{throw error},[],{stdio:'pipe'},
+      {stdout:bytes=>stdout.push(bytes),stderr:bytes=>stderr.push(bytes)}),actual=>actual===error)
+    assert.deepEqual(stdout,[error.stdout]);assert.deepEqual(stderr,[error.stderr])
+    assert.equal(error.status,1);assert.equal(error.signal,null)
+  }
+})
+test('native failure output cannot replace the failure when a log sink throws or output is absent',()=>{
+  for(const fields of [{stdout:'output',stderr:'error'},{stdout:null,stderr:undefined}]){
+    const error=Object.assign(Error('original failure'),fields)
+    assert.throws(()=>runNativeSDKCheckCommand(()=>{throw error},[],{stdio:'pipe'},
+      {stdout:()=>{throw Error('stdout sink failed')},stderr:()=>{throw Error('stderr sink failed')}}),actual=>actual===error)
+  }
+})
+test('inherited native failure output is not replayed',()=>{
+  const error=Object.assign(Error('original failure'),{stdout:'output',stderr:'error'})
+  const writes=[]
+  assert.throws(()=>runNativeSDKCheckCommand(()=>{throw error},[],{stdio:'inherit'},
+    {stdout:bytes=>writes.push(bytes),stderr:bytes=>writes.push(bytes)}),actual=>actual===error)
+  assert.deepEqual(writes,[])
+})
 
 test('native CI clears publication and experimental settings but keeps ordinary environment',()=>{
   assert.deepEqual(nativeSDKCheckEnvironment({PATH:'/bin',SDK_RELEASE:'1',SDK_RELEASE_VERSION:'0.1.0-alpha.0',

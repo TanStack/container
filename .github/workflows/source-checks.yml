@@ -55,6 +55,7 @@ jobs:
           node --test tests/native-browser-diagnostic.test.mjs
           node --test tests/native-terminal-viewport.test.mjs
           node --test tests/native-site-terminal-matrix.test.mjs
+          node --test tests/native-site-terminal-repeats.test.mjs
           node --test tests/native-terminal-screen.test.mjs
           node --test tests/native-terminal-settlement.test.mjs
       - name: Check Vite request diagnostics
@@ -62,7 +63,11 @@ jobs:
       - name: Check callable resolver probe accounting
         run: node --test tests/native-callable-resolver.test.mjs tests/native-vite-private-imports.test.mjs tests/native-owner-workflows.test.mjs
       - name: Check installed production matrix accounting
-        run: node --test tests/native-owner-production.test.mjs tests/native-streaming-node-control.test.mjs
+        run: node --test tests/native-owner-production.test.mjs tests/native-owner-timings.test.mjs tests/native-streaming-node-control.test.mjs
+      - name: Check complete SDK repeat accounting
+        run: node --test tests/native-sdk-repeats.test.mjs
+      - name: Check native progress clocks and fatal diagnostics
+        run: npx --no-install vitest run tests/native-dev-server-fatal.test.ts tests/native-owner-progress-clock.test.ts
       - name: Check private-import callback diagnostics against pinned Vite sources
         run: node --test tests/vite-private-callback-trace.test.mjs
       - name: Check WASI file-proxy failure controls

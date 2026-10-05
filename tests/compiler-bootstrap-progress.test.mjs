@@ -10,10 +10,14 @@ test('both pinned loaders keep their original await and cleanup boundaries',()=>
     const result=addCompilerBootstrapProgress(source,'/progress.mjs')
     assert.match(result,/__nativeCompilerBootstrap\("fetching-wasm"\)\nconst __wasmResponse = await globalThis.fetch\(__wasmUrl\)/)
     assert.match(result,/__nativeCompilerBootstrap\("reading-wasm"\)\nconst __wasmFile = await __wasmResponse.arrayBuffer\(\)\n__nativeCompilerBootstrap\("wasm-bytes-ready"\)/)
+    assert.match(result,/__nativeCompilerBootstrap\("allocating-memory"\)\nconst __sharedMemory = new WebAssembly.Memory\(\{/)
+    assert.match(result,/\}\)\n__nativeCompilerBootstrap\("memory-ready"\)\nconst __asyncWorkPoolSize = 4/)
     const restored=result.replace(/^import \{reportCompilerBootstrap[^\n]+\nlet __nativeCompilerWorkerId=0\n/,'')
       .replace('__nativeCompilerBootstrap("fetching-wasm")\n','')
       .replace('__nativeCompilerBootstrap("reading-wasm")\n','')
       .replace('\n__nativeCompilerBootstrap("wasm-bytes-ready")','')
+      .replace('__nativeCompilerBootstrap("allocating-memory")\n','')
+      .replace('__nativeCompilerBootstrap("memory-ready")\n','')
       .replace('  __nativeCompilerBootstrap("initializing-wasi")\n','')
       .replace('\n  __nativeCompilerBootstrap("binding-ready")','')
       .replace('\n      __observeNativeCompilerWorker(worker, ++__nativeCompilerWorkerId)','')
@@ -26,6 +30,7 @@ test('missing, duplicate or already instrumented boundaries fail the build',()=>
   const source=readFileSync('node_modules/@rolldown/browser/dist/rolldown-binding.wasi-browser.js','utf8')
   for(const anchor of ['const __wasmResponse = await globalThis.fetch(__wasmUrl)',
     'const __wasmFile = await __wasmResponse.arrayBuffer()',
+    'const __sharedMemory = new WebAssembly.Memory({','const __asyncWorkPoolSize = 4',
     '  ;({\n    instance: __napiInstance,','      __wasiWorkers.add(worker)',
     '  __publishWasiDispose(__napiModule.exports)']){
     assert.throws(()=>addCompilerBootstrapProgress(source.replace(anchor,''),'/progress.mjs'))

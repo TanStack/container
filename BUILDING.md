@@ -309,6 +309,36 @@ browser dependency lock and browser catalog. `complete` means all 12 pairs
 ran, `passed` requires all 12 to pass. Host-page errors are diagnostic in this
 terminal driver, use the separate full-site gate for error-free host acceptance.
 
+For repeated terminal checks, run the same complete matrix at least twice:
+
+```sh
+node scripts/probe-local-native-terminal-repeats.mjs SITE_FIXTURE INSTALLED_SDK DEPLOYMENT \
+  --site http://127.0.0.1:4508 --preview http://127.0.0.1:4509 \
+  --runner /absolute/path/to/isolated-runner --runs 2
+```
+
+`--runs` accepts 2..5, default 2. Every planned matrix still requires all twelve
+pairs and keeps its own receipt. A later pass cannot replace an earlier failure.
+Inputs must match throughout. Fresh browsers per pair test repeated workflows,
+not a long-lived browser soak. The original deadlines and host-error scope stay
+unchanged.
+
+For repeated complete SDK workflows with tracing off:
+
+```sh
+node scripts/repeat-native-sdk.mjs INSTALLED_SDK DEPLOYMENT --runs 2
+```
+
+This runs the original five-example SDK and owner/terminal/agent test twice
+in Chromium, Firefox and WebKit, 30 example runs total. `--runs` accepts 2..5.
+`--browser chromium|firefox|webkit` explicitly selects a single-engine diagnostic;
+the default is all three. The original commands and deadlines stay unchanged.
+The harness checks installed package/deployment inputs, example and runner
+sources, locked Playwright versions and the browser catalog between workflows.
+It keeps each log and stops on the first failure, with no retry replacing it.
+This tests repeated SDK workflows, not a long-lived browser soak, real-site
+integration, production builds or publication.
+
 Source snapshots record both compressed gzip and canonical tar hashes.
 Different Node/zlib versions can compress the same tar differently. Verification
 compares the exact canonical tar and reports the supplied gzip hash, pin the

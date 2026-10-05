@@ -13,6 +13,25 @@ export function nativeSDKCheckEnvironment(env=process.env){
     !/^(?:SDK_|NATIVE_|BROWSER_|MVDAN_)/.test(name)&&name!=='TANSTACK_ROUTER_SOURCE')),SDK_RELEASE:'0',SDK_BUILD_PROFILE:'native'}
 }
 
+export function runNativeSDKCheckCommand(run,args,options,{
+  stdout=bytes=>process.stdout.write(bytes),stderr=bytes=>process.stderr.write(bytes),
+}={}){
+  try{
+    const output=run(process.execPath,args,options)
+    if(options.stdio==='pipe')stdout(String(output))
+    return output
+  }catch(error){
+    if(options.stdio==='pipe'){
+      for(const [write,bytes]of [[stdout,error.stdout],[stderr,error.stderr]]){
+        if(typeof bytes!=='string'&&!Buffer.isBuffer(bytes))continue
+        // A failed log sink must not replace the original command failure.
+        try{write(bytes)}catch{}
+      }
+    }
+    throw error
+  }
+}
+
 export function readNativeSDKCheckAcceptance(output){
   const rows=String(output).split('\n').filter(line=>line.startsWith('NATIVE_RELEASE_ACCEPTANCE '))
     .map(line=>JSON.parse(line.slice('NATIVE_RELEASE_ACCEPTANCE '.length)))
@@ -92,10 +111,8 @@ export function checkNativeSDK({root=sourceRoot,env=process.env,run=execFileSync
     node:process.version,source,passed:false,phase:'runtime build'}
   mkdirSync(join(root,'test-results'),{recursive:true})
   const execute=(script,args=[],capture=false,extraEnvironment={})=>{
-    const output=run(process.execPath,[join(root,script),...args],{cwd:root,env:{...environment,...extraEnvironment},
+    return runNativeSDKCheckCommand(run,[join(root,script),...args],{cwd:root,env:{...environment,...extraEnvironment},
       stdio:capture?'pipe':'inherit',encoding:'utf8',maxBuffer:64*1024*1024})
-    if(capture)process.stdout.write(String(output))
-    return output
   }
   try{
     execute('scripts/build-release-runtime.mjs')

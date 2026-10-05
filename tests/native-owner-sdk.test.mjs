@@ -13,6 +13,7 @@ import {readPinnedNativeExamples} from '../scripts/native-example-sources.mjs'
 import {sdkBrowserAssets} from '../scripts/sdk-browser-assets.mjs'
 import {installNativeStreamObservation} from '../scripts/native-stream-observation.mjs'
 import {observeNativeOwnerStartup} from '../scripts/native-owner-startup-observation.mjs'
+import {writeNativeOwnerTimings} from '../scripts/native-owner-timings.mjs'
 import {installFetchConsumptionObservation} from '../scripts/native-fetch-consumption-observation.mjs'
 import {installNativeWorkerIOObservation} from '../scripts/native-worker-io-observation.mjs'
 import {installNativePreviewInteractionObservation} from '../scripts/native-preview-interaction-observation.mjs'
@@ -1346,6 +1347,10 @@ test('packaged native SDK runs a project in a separate-origin owner frame',{
               delete real.generatedLock
             }
             assert.ok(real.port>0,`${browserType.name()} ${example.name}`)
+            assert.ok(real.startupStages.length>0,'Startup must retain progress events')
+            assert.ok(real.startupStages.every(({elapsedMs},index,stages)=>
+              Number.isSafeInteger(elapsedMs)&&elapsedMs>=0&&(index===0||elapsedMs>=stages[index-1].elapsedMs)),
+              'Startup progress must use one numeric, nondecreasing receiver clock')
             assert.equal(real.status,200,`${browserType.name()} ${example.name}`)
             assert.equal(real.ssr,true,`${browserType.name()} ${example.name}`)
             assert.ok(real.initial.includes(example.initial),`${browserType.name()} ${example.name} initial preview`)
@@ -1393,12 +1398,9 @@ test('packaged native SDK runs a project in a separate-origin owner frame',{
                   real.production.productionCSS?.blue600,true,
                   `${browserType.name()} production Tailwind utility: ${JSON.stringify(real)}`)
               }else assert.equal(real.production.clicked,true,`${browserType.name()} production hydration: ${JSON.stringify({real,errors:realFailures})}`)
-              if(process.env.NATIVE_OWNER_TIMINGS==='1')console.log(JSON.stringify({browser:browserType.name(),example:example.path,
-                timings:real.timings,
-                startupStages:real.startupStages,
-                checkpointBytes:real.production.checkpointBytes,checkpointChunks:real.production.checkpointChunks,
-                restoreMs:real.production.restoreMs,restoreTimes:real.production.restoreTimes}))
             }
+            writeNativeOwnerTimings({enabled:process.env.NATIVE_OWNER_TIMINGS==='1',
+              browser:browserType.name(),example:example.path,result:real})
             console.log(JSON.stringify({browser:browserType.name(),example:example.name,
               development:'passed',restart:example.restart?'passed':'not requested',
               productionBuild:example.production?(real.production.viteOnlyProbe?'Vite API':'declared-script API'):'not requested',

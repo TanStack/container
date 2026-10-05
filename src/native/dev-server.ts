@@ -16,6 +16,8 @@ import {linkNativeFilesystemWorker} from './filesystem-worker-link.mjs'
 
 type Pending={operation:string;resolve:(value:any)=>void;reject:(error:Error)=>void;timer?:ReturnType<typeof setTimeout>;onOutput?:NativeTerminalOutput}
 export type NativeDevServerEvent=
+  // Receiver-clock time since this dev server, or owner client, was created.
+  // Worker-local clocks are not comparable across bootstrap and child workers.
   |{type:'progress';phase:string;elapsedMs:number}
   |{type:'diagnostic';error:string;stack?:string}
   |{type:'output';stream:'stdout'|'stderr';text:string}
@@ -129,8 +131,9 @@ export class NativeDevServer {
         return
       }
       if(data.type==='native-dev-progress'){
-        this.progress.push({phase:data.phase,elapsedMs:data.elapsedMs})
-        this.#emit({type:'progress',phase:data.phase,elapsedMs:data.elapsedMs})
+        const elapsedMs=Math.round(performance.now()-this.#startedAt)
+        this.progress.push({phase:data.phase,elapsedMs})
+        this.#emit({type:'progress',phase:data.phase,elapsedMs})
         if(data.phase==='start-response-posted')this.#scheduleStartReconcile(250)
         return
       }

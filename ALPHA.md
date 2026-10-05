@@ -6,6 +6,17 @@ Earlier status claims and commands are preserved in
 
 ## Current browser-native release path
 
+Checkpoint follow-up, October 4: this branch adds consistent progress clocks,
+compiler memory startup markers, failure-output logging and repeat-test harnesses.
+It preserves the newer framework pins and lockfiles from the earlier checkpoint.
+The new merged source needs its own Linux build result.
+
+The latest local Mac pair passes all six strict site workflows. Its repeated
+terminal matrix finishes with 23 of 24 cells passing. In one WebKit Counter
+cell, the terminal saves the edit but the preview keeps the old text past the
+original deadline. Three separate diagnostic runs pass, they do not explain
+or replace that failure. Alpha release and production adoption remain open.
+
 Current Linux follow-up, October 4: fresh runtime and private package builds,
 consumer adoption and all 212 release checks pass. Chromium and Firefox pass
 all five examples, but WebKit fails Router SSR's original 30-second HTTP

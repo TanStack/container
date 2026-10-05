@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {cpSync,mkdtempSync,mkdirSync,readFileSync,writeFileSync} from 'node:fs'
-import {join} from 'node:path'
+import {cpSync,mkdtempSync,mkdirSync,readFileSync,writeFileSync,unlinkSync} from 'node:fs'
+import {dirname,join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {nativeReleaseExamples,nativeExampleHash,readPinnedNativeExamples} from '../scripts/native-example-sources.mjs'
-import {nativeReleaseAcceptancePlan} from '../scripts/native-release-acceptance.mjs'
+import {nativeReleaseAcceptancePlan,nativeReleaseRunnerIdentity} from '../scripts/native-release-acceptance.mjs'
 
 function fixture(){
   const root=mkdtempSync(join(tmpdir(),'native-example-source-test-'))
@@ -72,4 +72,23 @@ test('release browser plan uses installed inputs, original deadlines and no inhe
       NATIVE_DEPLOYMENT_DIR:'/consumer/hosted',NATIVE_OWNER_RUNTIME_CATALOG:'1',
       NATIVE_OWNER_PINNED_EXAMPLES:'1',NATIVE_TEST_BROWSER:entry.browser})
   }
+})
+
+test('acceptance runner identity binds the timing helper and notices changes or missing inputs',()=>{
+  const expected=nativeReleaseRunnerIdentity(process.cwd())
+  const helper='scripts/native-owner-timings.mjs'
+  assert.equal(expected[helper],nativeExampleHash(readFileSync(helper)))
+  const root=mkdtempSync(join(tmpdir(),'native-runner-identity-test-'))
+  for(const path of Object.keys(expected)){
+    mkdirSync(dirname(join(root,path)),{recursive:true})
+    cpSync(path,join(root,path),{errorOnExist:true,force:false})
+  }
+  assert.deepEqual(nativeReleaseRunnerIdentity(root),expected)
+  writeFileSync(join(root,helper),readFileSync(join(root,helper))+'\n// changed test input\n')
+  const changed=nativeReleaseRunnerIdentity(root)
+  assert.notEqual(changed[helper],expected[helper])
+  for(const path of Object.keys(expected).filter(path=>path!==helper))assert.equal(changed[path],expected[path])
+  // Remove only the test's own copied helper, never a source or installed file.
+  unlinkSync(join(root,helper))
+  assert.throws(()=>nativeReleaseRunnerIdentity(root),{code:'ENOENT'})
 })

@@ -24,6 +24,17 @@ export function nativeReleaseAcceptancePlan({root=process.cwd(),sdk,deployment,e
   }))
 }
 
+export function nativeReleaseRunnerIdentity(root){
+  return Object.fromEntries(['scripts/native-release-acceptance.mjs','scripts/sdk-browser-assets.mjs',
+    'scripts/native-example-sources.mjs','scripts/acceptance-failures.mjs','scripts/native-stream-observation.mjs',
+    'scripts/native-install-stage-observation.mjs','scripts/native-install-filesystem-observation.mjs','scripts/safari-install-stage-trace.mjs',
+    'scripts/native-owner-startup-observation.mjs','scripts/native-owner-timings.mjs',
+    'scripts/native-fetch-consumption-observation.mjs','scripts/native-worker-io-observation.mjs',
+    'scripts/native-preview-interaction-observation.mjs','scripts/native-preview-click-listener-observation.mjs',
+    'tests/native-owner-sdk.test.mjs'].map(path=>
+    [path,nativeExampleHash(readFileSync(join(root,path)))]))
+}
+
 export function nativeReleaseAcceptanceIdentity(root,sdk,deployment){
   installedPackageInventory(sdk)
   const require=createRequire(join(sdk,'package.json'))
@@ -52,13 +63,7 @@ export function nativeReleaseAcceptanceIdentity(root,sdk,deployment){
     assert.deepEqual(deployed.get(file.path),file,'Native acceptance deployment differs from installed runtime: '+file.path)
   }
   const pinned=readPinnedNativeExamples(root)
-  const runners=Object.fromEntries(['scripts/native-release-acceptance.mjs','scripts/sdk-browser-assets.mjs',
-    'scripts/native-example-sources.mjs','scripts/acceptance-failures.mjs','scripts/native-stream-observation.mjs',
-    'scripts/native-install-stage-observation.mjs','scripts/native-install-filesystem-observation.mjs','scripts/safari-install-stage-trace.mjs',
-    'scripts/native-owner-startup-observation.mjs','scripts/native-fetch-consumption-observation.mjs','scripts/native-worker-io-observation.mjs',
-    'scripts/native-preview-interaction-observation.mjs','scripts/native-preview-click-listener-observation.mjs',
-    'tests/native-owner-sdk.test.mjs'].map(path=>
-    [path,nativeExampleHash(readFileSync(join(root,path)))]))
+  const runners=nativeReleaseRunnerIdentity(root)
   return {sdkManifestSHA256:nativeExampleHash(readFileSync(join(sdk,'package-assets.json'))),
     runtimeManifestSHA256:packageManifestSHA256,
     deploymentManifestSHA256:nativeExampleHash(readFileSync(join(deployment,'deployment-manifest.json'))),

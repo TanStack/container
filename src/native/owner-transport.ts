@@ -464,12 +464,18 @@ export class NativeOwnerClient{
   #httpRequests=new Set<(reason:unknown)=>void>()
   #next=0
   #closed=false
+  #connectedAt=performance.now()
   private constructor(port:MessagePort){
     this.#port=port
     port.onmessage=({data})=>{
       if(data?.protocol!==protocol)return
       if(data.type==='event'){
-        const event=data.event as NativeDevServerEvent
+        const incoming=data.event as NativeDevServerEvent
+        // Restore and replacement servers have their own clock origins. Keep
+        // this client's complete event history on one receiving clock instead.
+        const event=incoming.type==='progress'
+          ?{...incoming,elapsedMs:Math.round(performance.now()-this.#connectedAt)}
+          :incoming
         this.events.push(event)
         if(this.events.length>256)this.events.shift()
         for(const listener of this.#listeners)try{listener(event)}catch{/* Observers cannot affect the owner. */}
