@@ -89,7 +89,7 @@ export class BrowserCommonJS{
     if(filename.endsWith('.cjs'))return true
     if(!filename.endsWith('.js')){
       const name=filename.slice(filename.lastIndexOf('/')+1)
-      if(name.includes('.')||!existsSync(filename)||!statSync(filename).isFile())return false
+      if(name.includes('.')||!statSync(filename,{throwIfNoEntry:false})?.isFile())return false
       const firstLine=(readFileSync(filename,'utf8') as string).split('\n',1)[0]!
       if(!/^#!\s*(?:\/usr\/bin\/env(?:\s+-S)?\s+node(?:\s|$)|\/\S*\/node(?:\s|$))/.test(firstLine))return false
     }
@@ -168,11 +168,11 @@ export class BrowserCommonJS{
     if(!isContainerModulePath(base+'/'))throw Error(`CommonJS path is outside the container filesystem: ${base}`)
     for(const extension of extensions){
       const candidate=base+extension
-      if(existsSync(candidate)&&statSync(candidate).isFile())return candidate
+      if(statSync(candidate,{throwIfNoEntry:false})?.isFile())return candidate
     }
     for(const extension of extensions.slice(1)){
       const candidate=join(base,'index'+extension)
-      if(existsSync(candidate)&&statSync(candidate).isFile())return candidate
+      if(statSync(candidate,{throwIfNoEntry:false})?.isFile())return candidate
     }
     throw Error(`CommonJS file not found: ${base}`)
   }

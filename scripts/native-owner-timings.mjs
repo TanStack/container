@@ -13,11 +13,12 @@ export function nativeOwnerTimingRecord({browser,example,result}){
   duration(result.timings.startMs)
   const timings=Object.fromEntries(Object.entries(result.timings).map(([name,value])=>[name,duration(value)]))
   assert.ok(Array.isArray(result.startupStages),'Missing returned startup stages')
-  const startupStages=result.startupStages.map(({phase,elapsedMs})=>{
+  const startupStages=result.startupStages.map(({phase,elapsedMs,durationMs})=>{
     assert.ok(typeof phase==='string'&&phase.length>0,'Invalid startup phase')
     // Relayed child-worker phases do not always carry a worker timestamp.
     // Keep the phase and leave its time unknown, never invent or clamp a value.
-    return elapsedMs===undefined?{phase}:{phase,elapsedMs:duration(elapsedMs)}
+    return {phase,...(elapsedMs===undefined?{}:{elapsedMs:duration(elapsedMs)}),
+      ...(durationMs===undefined?{}:{durationMs:duration(durationMs)})}
   })
   const record={browser,example,timings,startupStages}
   if(result.production){

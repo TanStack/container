@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtempSync,mkdirSync,readFileSync,writeFileSync} from 'node:fs'
+import {mkdtempSync,mkdirSync,readFileSync,writeFileSync,symlinkSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {readPackageNotices,readmeMITNotice,addPackageNotices} from '../scripts/package-notices.mjs'
@@ -63,4 +63,51 @@ test('README identifiers, links and incomplete MIT notices do not count as licen
     assert.equal(readmeMITNotice(full.replace(fragment,'')),'')
   }
   assert.equal(readmeMITNotice(full.replace('#### LICENSE','#### Usage')),'')
+})
+
+test('collects shipped third-party notice variants without unrelated helper names',()=>{
+  const directory=fixture()
+  const names=['LICENSE','THIRD-PARTY-LICENSE','third_party_licenses.txt',
+    'Third Party Notices.md','THIRDPARTY-LICENCE','third.party.notice.txt']
+  for(const name of [...names,'third-party-licensee.js','third-party.js',
+    'notices-helper.js','third-party-licensehelper.js'])writeFileSync(join(directory,name),'text:'+name)
+  assert.equal(readPackageNotices(directory),names.sort((a,b)=>a.localeCompare(b)).map(name=>'text:'+name).join('\n'))
+})
+
+test('a third-party notice does not hide the package own README license',()=>{
+  const directory=fixture(),readme=readFileSync('node_modules/brorand/README.md','utf8')
+  writeFileSync(join(directory,'README.md'),readme)
+  writeFileSync(join(directory,'THIRD-PARTY-LICENSE'),'upstream dependency notice')
+  assert.equal(readPackageNotices(directory),readmeMITNotice(readme)+'\nupstream dependency notice')
+})
+
+test('retains third-party notices even when a README has no complete license',()=>{
+  const directory=fixture()
+  writeFileSync(join(directory,'THIRD-PARTY-NOTICES.txt'),'dependency attribution')
+  assert.equal(readPackageNotices(directory),'dependency attribution')
+  writeFileSync(join(directory,'README.md'),'## License\nMIT\n')
+  assert.equal(readPackageNotices(directory),'dependency attribution')
+})
+
+test('rejects directories and symlinks masquerading as third-party notices',()=>{
+  const directory=fixture(),linked=fixture()
+  mkdirSync(join(directory,'THIRD-PARTY-LICENSE'))
+  assert.throws(()=>readPackageNotices(directory),/Expected a regular package notice file/)
+  writeFileSync(join(linked,'original.txt'),'original notice')
+  symlinkSync('original.txt',join(linked,'THIRD-PARTY-LICENSE'))
+  assert.throws(()=>readPackageNotices(linked),/Expected a regular package notice file/)
+})
+
+test('the real browser compiler collector includes Rolldown bundled notices verbatim',()=>{
+  const roots=['node_modules/@rolldown/browser',
+    'tests/fixtures/native-runtime-832/node_modules/@rolldown/browser']
+  for(const directory of roots){
+    const manifest=JSON.parse(readFileSync(join(directory,'package.json'))),packages=new Map()
+    addPackageNotices(packages,directory,manifest)
+    const text=packages.get(manifest.name+'@'+manifest.version).notices
+    assert.equal(text,readFileSync(join(directory,'LICENSE'),'utf8')+'\n'+
+      readFileSync(join(directory,'THIRD-PARTY-LICENSE'),'utf8'))
+    assert.match(text,/2017 \[these people\]/)
+    assert.match(text,/2020 Evan Wallace/)
+  }
 })

@@ -85,7 +85,7 @@ test('SDK repeats run two complete original matrices with all tracing and narrow
     assert.deepEqual(call.args,['--test','--test-force-exit','--test-timeout=180000','/project/tests/native-owner-sdk.test.mjs'])
     assert.equal(call.settings.maxBuffer,64*1024*1024)
     assert.deepEqual(Object.keys(call.settings.env).sort(),['PATH','NATIVE_TEST_BROWSER','NATIVE_SDK_BUNDLE_DIR',
-      'NATIVE_DEPLOYMENT_DIR','NATIVE_OWNER_RUNTIME_CATALOG','NATIVE_OWNER_PINNED_EXAMPLES'].sort())
+      'NATIVE_DEPLOYMENT_DIR','NATIVE_OWNER_RUNTIME_CATALOG','NATIVE_OWNER_PINNED_EXAMPLES','NATIVE_OWNER_TIMINGS'].sort())
   }
 })
 

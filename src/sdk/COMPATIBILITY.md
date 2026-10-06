@@ -331,8 +331,11 @@ or a hostile-code isolation boundary.
 Native project installation currently needs a matching npm v2/v3 lockfile or
 an explicit runtime lock. A declared `pnpm install` command is accepted as an
 install request, but does not mean pnpm's resolver or workspace-link behavior
-runs in the browser. The native runtime does not support arbitrary lifecycle
-scripts, Node native addons, or general shell/process parity. Native file
+runs in the browser. The native project installer rejects npm workspace links
+and local `file:` dependency links at both startup and live installation. The
+volume's symlink support does not imply installer support. The native runtime
+does not support arbitrary lifecycle scripts, Node native addons, or general
+shell/process parity. Native file
 checkpoints survive page reloads and browser-profile restarts in the tested
 desktop engines, but they restart the process and remain subject to browser
 storage quota and eviction. Publication is blocked pending shipped dependency

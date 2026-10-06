@@ -11,6 +11,11 @@ export function localNativeExamples() {
   return {
     name: 'local-native-examples',
     apply: 'serve',
+    config(config) {
+      // Fixtures can share installed dependencies, but not optimizer output
+      // from hosts with different roots and SDK aliases.
+      return { cacheDir: resolve(config.root ?? process.cwd(), '.native-local/vite-cache') }
+    },
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
         const url = new URL(request.url ?? '/', 'http://127.0.0.1')

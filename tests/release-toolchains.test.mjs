@@ -1,16 +1,73 @@
 import assert from 'node:assert/strict'
 import {createHash} from 'node:crypto'
-import {readFileSync} from 'node:fs'
+import {readFileSync,mkdtempSync,writeFileSync,mkdirSync,symlinkSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
 import test from 'node:test'
 import {releaseToolchainPlan,releaseToolchainPins,verifyDownload,selectGoDownload} from '../scripts/setup-release-toolchains.mjs'
 import {releaseRuntimeBuildPlan,buildReleaseRuntime} from '../scripts/build-release-runtime.mjs'
-import {mvdanShellGoBuild,mvdanShellBuildArguments} from '../scripts/mvdan-shell-build-options.mjs'
+import {mvdanShellGoBuild,mvdanShellBuildArguments,mvdanShellModule,mvdanShellModuleLicense} from '../scripts/mvdan-shell-build-options.mjs'
 
 test('shell builds exclude checkout identity and retain the locked offline recipe',()=>{
   assert.deepEqual(mvdanShellGoBuild,{trimpath:true,buildvcs:false,ldflags:['-s','-w']})
   assert.deepEqual(mvdanShellBuildArguments('/output/shell.wasm'),[
     'build','-trimpath','-buildvcs=false','-mod=readonly','-ldflags=-s -w','-o','/output/shell.wasm','.',
   ])
+})
+
+function moduleFixture(){
+  const directory=mkdtempSync(join(tmpdir(),'mvdan-module-notice-'))
+  return {directory,info:{Path:mvdanShellModule.path,Version:mvdanShellModule.version,Dir:directory}}
+}
+
+test('shell notice follows the Go-resolved module cache with the same build environment',()=>{
+  const {directory,info}=moduleFixture(),license=join(directory,'LICENSE')
+  writeFileSync(license,'Notice fixture\n',{flag:'wx'})
+  const env={GOOS:'js',GOARCH:'wasm',GOPATH:'/toolchain/gopath',GOMODCACHE:directory,GOPROXY:'off'},calls=[]
+  const actual=mvdanShellModuleLicense('/toolchain/go/bin/go','/source',env,(command,args,options)=>{
+    calls.push({command,args,options})
+    return args[0]==='list'?JSON.stringify(info):'all modules verified\n'
+  })
+  assert.equal(actual,license)
+  assert.deepEqual(calls.map(call=>call.args),[
+    ['list','-m','-mod=readonly','-json','mvdan.cc/sh/v3'],['mod','verify'],
+  ])
+  for(const call of calls){
+    assert.equal(call.command,'/toolchain/go/bin/go');assert.equal(call.options.cwd,'/source')
+    assert.equal(call.options.env,env);assert.equal(call.options.encoding,'utf8')
+  }
+  assert.match(readFileSync('scripts/build-mvdan-shell.mjs','utf8'),/copyFileSync\(moduleLicense,mvdanLicense\)/)
+})
+
+test('shell notice rejects another module, version, replacement or nonabsolute cache directory',()=>{
+  const {info}=moduleFixture()
+  for(const change of [{Path:'other/module'},{Version:'v3.14.0'},{Replace:{Dir:'/other'}},{Dir:'relative'},{Dir:null}]){
+    let calls=0
+    assert.throws(()=>mvdanShellModuleLicense('/go','/source',{},()=>{
+      calls++;return JSON.stringify({...info,...change})
+    }))
+    assert.equal(calls,1,'Invalid module inputs must fail before verification or notice access')
+  }
+})
+
+test('shell notice rejects missing text, directories and symbolic links',()=>{
+  for(const type of ['missing','directory','link']){
+    const {directory,info}=moduleFixture(),license=join(directory,'LICENSE')
+    if(type==='directory')mkdirSync(license)
+    if(type==='link'){
+      const target=join(directory,'text');writeFileSync(target,'Notice fixture\n',{flag:'wx'});symlinkSync(target,license)
+    }
+    assert.throws(()=>mvdanShellModuleLicense('/go','/source',{},(_command,args)=>
+      args[0]==='list'?JSON.stringify(info):'all modules verified\n'))
+  }
+})
+
+test('shell notice preserves Go list and cache-verification failures',()=>{
+  const {info}=moduleFixture(),failure=Error('Go module verification failed')
+  for(const failed of ['list','mod'])assert.throws(()=>mvdanShellModuleLicense('/go','/source',{},(_command,args)=>{
+    if(args[0]===failed)throw failure
+    return JSON.stringify(info)
+  }),error=>error===failure)
 })
 
 test('toolchain plan matches pinned descriptors on Linux x64 and ARM64, and fails on other hosts',()=>{

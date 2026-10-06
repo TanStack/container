@@ -15,20 +15,75 @@ vi.mock('../src/native/dev-server',()=>({NativeDevServer:class{
 import {installNativeOwnerHost} from '../src/native/owner-transport'
 beforeEach(()=>{state.disposed.mockReset();state.restore.mockReset();state.created.mockReset();state.reinstall.mockReset();state.mkdir.mockReset();state.rename.mockReset();state.remove.mockReset();state.openTerminalSession.mockReset()})
 
-function connectedOwner(){
+function connectedOwner(runtimeCandidates?:Array<{workerURL:string;toolchain:{vite:string;rolldown:string}}>,packageDownloadPolicy?:{additionalOrigins?:string[]}){
   let connect!:(event:any)=>void
   const parent={}
   vi.stubGlobal('location',new URL('http://owner.test/'));vi.stubGlobal('parent',parent)
   vi.stubGlobal('addEventListener',(_name:string,listener:any)=>{connect=listener})
   vi.stubGlobal('removeEventListener',vi.fn())
   const port={postMessage:vi.fn(),start:vi.fn(),close:vi.fn(),onmessage:undefined as any}
-  const cleanup=installNativeOwnerHost({allowedParentOrigin:'http://app.test',workerURL:'/engine.js'})
+  const cleanup=installNativeOwnerHost({allowedParentOrigin:'http://app.test',workerURL:'/engine.js',runtimeCandidates,packageDownloadPolicy})
   connect({origin:'http://app.test',source:parent,data:{protocol:'native-owner-v1',type:'connect'},ports:[port]})
   const request=(id:number,operation:string,fields:Record<string,unknown>={})=>port.onmessage({data:{
     protocol:'native-owner-v1',type:'request',id,operation,files:{},options:{},cwd:'/app',...fields,
   },ports:[]}) as Promise<void>
   return {port,request,cleanup}
 }
+
+test('owner startup policy comes from the host, never the parent project request',async()=>{
+  const {request,cleanup}=connectedOwner()
+  try{
+    await request(1,'start',{options:{packageDownloadPolicy:{additionalOrigins:['https://requested.example']}}})
+    expect(state.created.mock.calls[0][1].packageDownloadPolicy).toEqual({additionalOrigins:[]})
+  }finally{await cleanup();vi.unstubAllGlobals()}
+})
+
+test('configured owner policy reaches startup and the normal reinstall path',async()=>{
+  const {request,cleanup}=connectedOwner(undefined,{additionalOrigins:['https://configured.example']})
+  state.reinstall.mockResolvedValue({dispose:vi.fn(),subscribeEvents:()=>()=>{},waitForHTTPReady:async()=>3000})
+  try{
+    await request(1,'start',{options:{packageDownloadPolicy:{additionalOrigins:['https://requested.example']}}})
+    const policy={additionalOrigins:['https://configured.example']}
+    expect(state.created.mock.calls[0][1].packageDownloadPolicy).toEqual(policy)
+    await request(2,'reinstall')
+    expect(state.reinstall.mock.calls[0][0].packageDownloadPolicy).toEqual(policy)
+  }finally{await cleanup();vi.unstubAllGlobals()}
+})
+
+test('host policy is captured before startup and preserved through restoration',async()=>{
+  const additionalOrigins=['https://configured.example']
+  const {request,cleanup}=connectedOwner(undefined,{additionalOrigins})
+  additionalOrigins.push('https://later.example')
+  state.restore.mockResolvedValue({dispose:vi.fn(),subscribeEvents:()=>()=>{},waitForHTTPReady:async()=>3000})
+  try{
+    await request(1,'restore',{options:{packageDownloadPolicy:{additionalOrigins:['https://requested.example']}},key:'checkpoint'})
+    expect(state.restore.mock.calls[0][1].packageDownloadPolicy).toEqual({additionalOrigins:['https://configured.example']})
+  }finally{await cleanup();vi.unstubAllGlobals()}
+})
+
+test('owner progress includes locked runtime preparation before worker creation',async()=>{
+  const {request,port,cleanup}=connectedOwner([{workerURL:'/engine.js',toolchain:{vite:'8.3.1',rolldown:'1.2.11'}}])
+  try{
+    await request(1,'start',{options:{lock:{version:1,packages:[{installPath:'/node_modules/rolldown',version:'1.2.11'}]}}})
+    const events=port.postMessage.mock.calls.map(([data])=>data).filter(data=>data.type==='event')
+    expect(events.map(data=>data.event.phase)).toEqual(['owner-start-request-received',
+      'owner-runtime-preparation-started','owner-runtime-preparation-completed','owner-worker-created'])
+    expect(events.every(data=>Number.isFinite(data.event.elapsedMs)&&data.event.elapsedMs>=0)).toBe(true)
+    expect(events.find(data=>data.event.phase==='owner-runtime-preparation-completed')?.event.durationMs).toBeGreaterThanOrEqual(0)
+    expect(state.created).toHaveBeenCalledOnce()
+    expect(port.postMessage.mock.calls.find(([data])=>data.type==='response'&&data.id===1)?.[0].value).toBe(3000)
+  }finally{await cleanup();vi.unstubAllGlobals()}
+})
+
+test('failed owner progress delivery cannot replace a successful startup response',async()=>{
+  const {request,port,cleanup}=connectedOwner()
+  port.postMessage.mockImplementation(data=>{if(data.type==='event')throw Error('progress sink failed')})
+  try{
+    await request(1,'start')
+    expect(state.created).toHaveBeenCalledOnce()
+    expect(port.postMessage.mock.calls.find(([data])=>data.type==='response'&&data.id===1)?.[0]).toMatchObject({ok:true,value:3000})
+  }finally{await cleanup();vi.unstubAllGlobals()}
+})
 
 test.each([false,true])('reinstall waits for an active persistent terminal command, rejection=%s',async(rejectCommand)=>{
   let finish!:(reject:boolean)=>void

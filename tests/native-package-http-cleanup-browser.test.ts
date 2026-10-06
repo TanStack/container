@@ -24,7 +24,7 @@ test('failed package HTTP responses start cleanup without replacing their error 
             let timer
             try{
               const error=await Promise.race([
-                inspectBundledPackages('https://registry.npmjs.org/owned/-/owned-1.0.0.tgz','unused').catch(error=>error),
+                inspectBundledPackages('https://registry.npmjs.org/owned/-/owned-1.0.0.tgz','sha512-'+'A'.repeat(86)+'==').catch(error=>error),
                 new Promise(resolve=>{timer=setTimeout(()=>resolve(Error('Observation deadline')),1000)}),
               ])
               rows.push({mode,calls,sameReason:reason===error,message:error.message})

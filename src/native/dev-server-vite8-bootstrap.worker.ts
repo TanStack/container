@@ -1,12 +1,13 @@
-// The browser binding must initialize with browser globals before the Vite
-// environment installs its Node-compatible process facade.
+// App startup reports compiler progress. Commands and worker threads load the
+// browser-targeted compiler only when their module execution actually needs it.
 import {bootstrapNativeFilesystem} from './filesystem-bootstrap'
 import {installCompilerBootstrapReporter} from './compiler-bootstrap-progress.mjs'
 const bootstrapProgress=(phase:string)=>self.postMessage({type:'native-dev-progress',phase,elapsedMs:performance.now()})
 bootstrapProgress('bootstrap-entered')
 await bootstrapNativeFilesystem()
 bootstrapProgress('filesystem-connected')
-if(!new URL(self.location.href).searchParams.has('native-typecheck')){
+const launch=new URL(self.location.href).searchParams
+if(!['native-typecheck','native-command','native-thread'].some(flag=>launch.has(flag))){
   bootstrapProgress('rolldown-loading')
   const releaseCompilerReporter=installCompilerBootstrapReporter(bootstrapProgress)
   try{await import('@rolldown/browser')}

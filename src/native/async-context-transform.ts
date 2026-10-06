@@ -18,6 +18,9 @@ function asyncContextBabelPlugin(api:unknown){
   return {
     ...base,
     visitor:{...base.visitor,Function(path:any,state:any){
+      // Match Babel's own eligibility check before scanning the function body.
+      // Returning here does not skip nested functions in Babel's outer walk.
+      if(!path.node.async||path.node.generator)return
       const parent=path.parentPath
       if(parent?.isCallExpression()&&parent.node.callee?.object?.name==='Object'&&parent.node.callee?.property?.name==='getPrototypeOf')return
       if(parent?.isMemberExpression()&&parent.node.property?.name==='constructor')return

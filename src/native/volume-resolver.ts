@@ -54,14 +54,18 @@ function packageImportTarget(imports:Record<string,ExportTarget>,key:string,cond
 
 function existingFile(candidate:string):string|undefined{
   if(!isContainerModulePath(candidate))return
-  for(const extension of extensions){
+  // A live existsSync already performs a stat round trip. Inspect each path
+  // once, and retain only this resolution's candidate metadata, never a cache.
+  const candidateStat=statSync(candidate,{throwIfNoEntry:false})
+  if(candidateStat?.isFile())return candidate
+  for(const extension of extensions.slice(1)){
     const filename=candidate+extension
-    if(existsSync(filename)&&statSync(filename).isFile())return filename
+    if(statSync(filename,{throwIfNoEntry:false})?.isFile())return filename
   }
-  if(existsSync(candidate)&&statSync(candidate).isDirectory()){
+  if(candidateStat?.isDirectory()){
     for(const extension of extensions.slice(1)){
       const filename=join(candidate,'index'+extension)
-      if(existsSync(filename)&&statSync(filename).isFile())return filename
+      if(statSync(filename,{throwIfNoEntry:false})?.isFile())return filename
     }
   }
 }
@@ -150,6 +154,9 @@ export function resolveVolumePrivateImport(id:string,importer:string,conditions:
 /** Resolve a server module synchronously for import.meta.resolve. */
 export function resolveVolumeImport(id:string,importer:string,consumer:'client'|'server'='server',additionalConditions?:Iterable<string>):string|undefined{
   if(!isContainerModulePath(importer))return
+  // Node builtins win over installed packages. Client resolution still needs
+  // to allow browser packages and the project's normal plugin behavior.
+  if(consumer==='server'&&isBuiltin(id))return id.startsWith('node:')?id:`node:${id}`
   const conditions=new Set(consumer==='client'?clientConditions:serverConditions)
   for(const condition of additionalConditions??[])conditions.add(condition)
   if(id.startsWith('#'))return resolvePackageImport(id,importer,conditions)
@@ -184,7 +191,7 @@ export function volumeResolver():Plugin{
     load(id){
       if(/[?&]url(?:[&=]|$)/.test(id))return
       const path=id.split('?')[0]
-      if(!isContainerModulePath(path)||!/\.(?:[cm]?[jt]sx?|json|css|astro)$/.test(path)||!existsSync(path)||!statSync(path).isFile())return
+      if(!isContainerModulePath(path)||!/\.(?:[cm]?[jt]sx?|json|css|astro)$/.test(path)||!statSync(path,{throwIfNoEntry:false})?.isFile())return
       return readFileSync(path,'utf8') as string
     },
     async resolveId(id,importer,options){
@@ -219,6 +226,8 @@ export function volumeResolver():Plugin{
         }
         const resolved=bareId.startsWith('#')?resolvePackageImport(bareId,packageImporter,conditions):
           resolveVolumeImport(bareId,packageImporter,this.environment?.config.consumer==='server'?'server':'client',conditions)
+        if(resolved&&this.environment?.config.consumer==='server'&&isBuiltin(resolved))
+          return {id:resolved+query,external:true}
         return resolved?resolved+query:undefined
       }
       else return

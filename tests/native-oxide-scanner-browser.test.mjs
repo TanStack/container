@@ -10,7 +10,7 @@ import {createHash} from 'node:crypto'
 import {build} from 'esbuild'
 import {replaceWasiFsProxy} from '../scripts/wasi-fs-proxy-transport.mjs'
 
-test('the installed Oxide scanner reads the shared filesystem without blocking its host',{
+test('filesystem startup lets the installed Oxide scanner run without booting Rolldown',{
   skip:process.env.NATIVE_OXIDE_SCANNER_CONTROL!=='1'?'Opt-in actual Oxide scanner control':false,
   timeout:180000,
 },async()=>{
@@ -60,13 +60,11 @@ test('the installed Oxide scanner reads the shared filesystem without blocking i
     export {linkNativeFilesystemWorker} from './src/native/filesystem-worker-link.mjs';
     export async function mountFiles(files){
       const {resetVolume,vol,default:fs}=await import('./src/vite-browser/node-fs.ts');
-      const {registerCompilerFilesystem}=await import('./src/native/compiler-filesystem-registry.ts');
-      registerCompilerFilesystem({fs,vol});
       resetVolume(files);
       return fs;
     }
   `,resolveDir:root,sourcefile:'oxide-filesystem-control.mjs'},platform:'browser',bundle:true,
-    write:false,format:'esm',target:'es2022',alias:{'node:buffer':'buffer/','node:events':'events/',
+    write:false,metafile:true,format:'esm',target:'es2022',alias:{'node:buffer':'buffer/','node:events':'events/',
       'node:stream':'stream-browserify','node:path':'path-browserify'},plugins:[{
       name:'pinned-control-filesystem-codec',setup(bundler){
         bundler.onResolve({filter:/^tanstack:filesystem-codec-124$/},()=>({path:join(codecRoot,'fs-proxy.js')}));
@@ -76,6 +74,9 @@ test('the installed Oxide scanner reads the shared filesystem without blocking i
         }));
       },
     }]})
+  const compilerInputs=Object.keys(provider.metafile.inputs).filter(path=>/(?:rolldown|oxide)/.test(path)&&path!=='oxide-filesystem-control.mjs')
+  assert.deepEqual(compilerInputs,[],'Filesystem startup must not load a compiler')
+  receipt.inputs.compilerInputs=compilerInputs
   receipt.inputs.filesystemControlSha256=createHash('sha256').update(provider.outputFiles[0].text).digest('hex')
   const worker=`import {bootstrapNativeFilesystem,mountFiles} from '/provider.mjs';
     await bootstrapNativeFilesystem();

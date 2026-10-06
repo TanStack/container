@@ -49,7 +49,7 @@ export function createWasiFilesystemService(fs,createHandler,{maxPendingWatchEve
       port?.close();throw new Error('Invalid WASI filesystem endpoint')
     }
     if(!port||typeof port.addEventListener!=='function')throw new TypeError('Invalid filesystem endpoint port')
-    const descriptors=new Set(),watches=new Map(),changedPaths=new Set(),directories=new Map()
+    const descriptors=new Set(),watches=new Map(),changedPaths=new Set(),directories=new Map(),methods=new Map()
     let nextDirectory=0
     const endpoint=new Proxy(fs,{get(target,method){
       if(method===WRITE_FILE_WITH_PARENTS)return (path,contents,options)=>
@@ -113,7 +113,11 @@ export function createWasiFilesystemService(fs,createHandler,{maxPendingWatchEve
       }
       const value=Reflect.get(target,method)
       if(typeof value!=='function'||['Stats','Dirent'].includes(method))return value
-      return (...args)=>{
+      // Codecs inspect the public methods while encoding constructor metadata.
+      // Reuse only method wrappers, never file data, stats or descriptor state.
+      const cached=methods.get(method)
+      if(cached?.value===value)return cached.wrapper
+      const wrapper=(...args)=>{
         const result=Reflect.apply(value,target,args)
         if(method==='openSync'){
           descriptors.add(result);descriptorPaths.set(result,String(args[0]))
@@ -133,6 +137,8 @@ export function createWasiFilesystemService(fs,createHandler,{maxPendingWatchEve
         if(method==='mkdtempSync')mark(result)
         return result
       }
+      methods.set(method,{value,wrapper})
+      return wrapper
     }})
     let handler
     try{handler=factory(endpoint)}catch(error){port.close();throw error}

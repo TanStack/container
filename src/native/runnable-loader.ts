@@ -27,6 +27,9 @@ function prettierPackageRoot(id:string):string|undefined{
   const match=/^(.*\/node_modules\/prettier)\/index\.mjs$/.exec(id)
   return match&&isContainerModulePath(match[1]+'/')?match[1]:undefined
 }
+function browserProviderURL(id:string):boolean{
+  return /^\/node_modules\/(?:prettier\/index\.mjs|esbuild\/lib\/main\.js|lightningcss\/node\/index\.(?:js|mjs)|@tailwindcss\/oxide\/index\.js)$/.test(id)
+}
 interface RunnableEnvironment{
   runner?:{import(id:string):Promise<unknown>;evaluator?:{runExternalModule?:(file:string)=>Promise<unknown>;setDataModuleImporter?:(importer:(id:string)=>Promise<unknown>)=>void}}
   pluginContainer:{resolveId(id:string,importer?:string):Promise<ResolvedId|null>}
@@ -37,10 +40,15 @@ interface RunnableEnvironment{
 export function installBrowserModuleFetch(environment:RunnableEnvironment,onActivity?:(phase:'start'|'end',id:string,handle:object)=>void):void{
   environment.runner?.evaluator?.setDataModuleImporter?.(id=>environment.runner!.import(id))
   const fetchModule=environment.fetchModule.bind(environment)
-  environment.fetchModule=async(id,importer,options)=>{
-    const handle={}
-    onActivity?.('start',id,handle)
-    try{
+  const fetchBrowserModule=async(id:string,importer?:string,options?:unknown):Promise<unknown>=>{
+      // Vite's module URLs are relative to the project root, not filesystem
+      // paths. Resolve provider entries through the project's own plugins so
+      // aliases and the actual installed package still determine the adapter.
+      if(browserProviderURL(id)){
+        const resolved=await environment.pluginContainer.resolveId(id,importer)
+        if(resolved&&isContainerModulePath(resolved.id))
+          return await fetchBrowserModule(resolved.id,importer,options)
+      }
       const dataURL=dataModuleURL(id)
       if(dataURL){
         const source=dataModuleSource(dataURL)
@@ -94,9 +102,14 @@ export function installBrowserModuleFetch(environment:RunnableEnvironment,onActi
       if(importer&&isContainerModulePath(importer)&&!id.startsWith('.')&&!id.startsWith('/')&&!id.startsWith('node:')&&!id.startsWith('data:')&&!id.includes(':')){
         const resolved=await environment.pluginContainer.resolveId(id,importer)
         if(resolved&&isBuiltin(resolved.id))return {externalize:resolved.id.startsWith('node:')?resolved.id:`node:${resolved.id}`,type:'builtin'}
-        if(resolved&&isContainerModulePath(resolved.id))return await fetchModule(resolved.id,importer,options)
+        if(resolved&&isContainerModulePath(resolved.id))return await fetchBrowserModule(resolved.id,importer,options)
       }
       return await fetchModule(id,importer,options)
-    }finally{onActivity?.('end',id,handle)}
+  }
+  environment.fetchModule=async(id,importer,options)=>{
+    const handle={}
+    onActivity?.('start',id,handle)
+    try{return await fetchBrowserModule(id,importer,options)}
+    finally{onActivity?.('end',id,handle)}
   }
 }

@@ -32,7 +32,7 @@ test('terminal runner binds unchanged source, the actual shared lock and the bro
   const dependencyRoot=mkdtempSync(join(tmpdir(),'native-terminal-deps-test-'))
   mkdirSync(join(directory,'scripts'));mkdirSync(join(dependencyRoot,'node_modules/playwright-core'),{recursive:true})
   symlinkSync(join(dependencyRoot,'node_modules'),join(directory,'node_modules'),'dir')
-  for(const name of ['test-local-native-terminal-examples.mjs','native-terminal-viewport.mjs'])
+  for(const name of ['test-local-native-terminal-examples.mjs','native-terminal-viewport.mjs','native-edited-preview.mjs'])
     copyFileSync(new URL('../scripts/'+name,import.meta.url),join(directory,'scripts',name))
   const names=['@playwright/test','playwright','playwright-core']
   const metadata={directory,packages:Object.fromEntries(names.map(name=>[name,{version:'1.63.0'}]))}
@@ -42,13 +42,13 @@ test('terminal runner binds unchanged source, the actual shared lock and the bro
   writeFileSync(join(dependencyRoot,'node_modules/playwright-core/browsers.json'),'{}')
   const bound=terminalMatrixRunner(metadata)
   assert.equal(bound.dependencyRoot,realpathSync(dependencyRoot))
-  assert.equal(Object.keys(bound.terminalHashes).length,2)
+  assert.equal(Object.keys(bound.terminalHashes).length,3)
   lock.packages['node_modules/playwright-core'].version='1.62.1'
   writeFileSync(lockPath,JSON.stringify(lock))
   assert.throws(()=>terminalMatrixRunner(metadata),/lock differs/)
   lock.packages['node_modules/playwright-core'].version='1.63.0'
   writeFileSync(lockPath,JSON.stringify(lock))
-  writeFileSync(join(directory,'scripts/native-terminal-viewport.mjs'),'// changed')
+  writeFileSync(join(directory,'scripts/native-edited-preview.mjs'),'// changed')
   assert.throws(()=>terminalMatrixRunner(metadata),/source differs/)
 })
 

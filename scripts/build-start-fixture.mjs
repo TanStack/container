@@ -9,8 +9,8 @@ const fixtureRoot = path.join(projectRoot, 'fixtures/start-basic')
 const outputDirectory = path.join(projectRoot, 'public/start-fixture')
 const projectOutputDirectory = path.join(outputDirectory, 'project')
 const fixtureDependencies = {
-  '@tanstack/react-router': '1.170.41',
-  '@tanstack/react-start': '1.168.60',
+  '@tanstack/react-router': '1.170.15',
+  '@tanstack/react-start': '1.168.25',
   react: '19.1.1',
   'react-dom': '19.1.1',
 }

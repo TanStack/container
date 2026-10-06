@@ -22,3 +22,11 @@ test('client readiness cannot pass before the UI mounts or swallow a failure', a
   const failure = Error('Client control never mounted')
   await assert.rejects(waitForPinnedStartClient({ getByText: () => ({ waitFor: () => Promise.reject(failure) }) }), error => error === failure)
 })
+
+test('SDK readiness preserves its shorter original client deadline', async () => {
+  let timeout
+  await waitForPinnedStartClient({ getByText: () => ({ waitFor: async options => { timeout = options.timeout } }) }, 30000)
+  assert.equal(timeout, 30000)
+  for (const value of [0, -1, 45001, Infinity, NaN, 1.5])
+    await assert.rejects(waitForPinnedStartClient({ getByText() { throw Error('Must not run') } }, value), TypeError)
+})

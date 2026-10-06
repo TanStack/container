@@ -20,7 +20,7 @@ export function nativeReleaseAcceptancePlan({root=process.cwd(),sdk,deployment,e
     args:['--test','--test-force-exit','--test-timeout=180000',join(root,'tests/native-owner-sdk.test.mjs')],
     options:{cwd:root,stdio:'inherit',env:{...inherited,
       NATIVE_SDK_BUNDLE_DIR:sdk,NATIVE_DEPLOYMENT_DIR:deployment,
-      NATIVE_OWNER_RUNTIME_CATALOG:'1',NATIVE_OWNER_PINNED_EXAMPLES:'1',NATIVE_TEST_BROWSER:browser}},
+      NATIVE_OWNER_RUNTIME_CATALOG:'1',NATIVE_OWNER_PINNED_EXAMPLES:'1',NATIVE_OWNER_TIMINGS:'1',NATIVE_TEST_BROWSER:browser}},
   }))
 }
 
@@ -29,6 +29,7 @@ export function nativeReleaseRunnerIdentity(root){
     'scripts/native-example-sources.mjs','scripts/acceptance-failures.mjs','scripts/native-stream-observation.mjs',
     'scripts/native-install-stage-observation.mjs','scripts/native-install-filesystem-observation.mjs','scripts/safari-install-stage-trace.mjs',
     'scripts/native-owner-startup-observation.mjs','scripts/native-owner-timings.mjs',
+    'scripts/native-start-example-readiness.mjs',
     'scripts/native-fetch-consumption-observation.mjs','scripts/native-worker-io-observation.mjs',
     'scripts/native-preview-interaction-observation.mjs','scripts/native-preview-click-listener-observation.mjs',
     'tests/native-owner-sdk.test.mjs'].map(path=>

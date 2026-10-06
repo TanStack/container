@@ -28,18 +28,22 @@ export function readmeMITNotice(text){
 
 export function readPackageNotices(directory){
   const entries=readdirSync(directory,{withFileTypes:true})
+  const primary=/^(license|licence|copying|notice)([._-]|$)/i
+  const thirdParty=/^third[._ -]?party[._ -](?:licen[cs]es?|notices?)([._ -]|$)/i
   const files=entries
-    .filter(entry=>/^(license|licence|copying|notice)([._-]|$)/i.test(entry.name))
+    .filter(entry=>primary.test(entry.name)||thirdParty.test(entry.name))
     .sort((a,b)=>a.name.localeCompare(b.name))
   const notices=files.map(entry=>{
     if(!entry.isFile())throw Error('Expected a regular package notice file: '+join(directory,entry.name))
     return readFileSync(join(directory,entry.name),'utf8')
   }).join('\n')
-  if(notices)return notices
+  if(files.some(entry=>primary.test(entry.name)))return notices
   const readme=entries.find(entry=>/^readme(?:\.md|\.markdown)?$/i.test(entry.name))
-  if(!readme)return ''
+  if(!readme)return notices
   if(!readme.isFile())throw Error('Expected a regular package README file: '+join(directory,readme.name))
-  return readmeMITNotice(readFileSync(join(directory,readme.name),'utf8'))
+  // A bundled dependency notice does not replace the package's own README
+  // license. Retain both when the package uses that form of attribution.
+  return [readmeMITNotice(readFileSync(join(directory,readme.name),'utf8')),notices].filter(Boolean).join('\n')
 }
 
 /** Keep independently bundled versions, while repeated inputs share one entry. */

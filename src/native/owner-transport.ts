@@ -16,14 +16,17 @@ import type {NativeOwnerResourceSnapshot} from './owner-resources'
 import {NativeTerminalCapture} from './terminal-capture'
 import {NativeTerminalInputSender} from './terminal-input-sender'
 import {abortableWait} from '../sandbox/abortable-wait'
+import {normalizePackageDownloadPolicy} from '../npm/download-policy'
+import type {PackageDownloadPolicy} from '../npm/download-policy'
 
-type OwnerOptions=Omit<NativeDevServerOptions,'workerURL'|'runtimeCandidates'|'assetBaseURL'> & {previewPort?:number}
+type OwnerOptions=Omit<NativeDevServerOptions,'workerURL'|'runtimeCandidates'|'assetBaseURL'|'packageDownloadPolicy'> & {previewPort?:number}
 type Pending={resolve:(value:any)=>void;reject:(error:Error)=>void;timer?:ReturnType<typeof setTimeout>;timeoutMs?:number;operation?:string;onOutput?:NativeTerminalOutput;cleanup?:()=>void}
 const protocol='native-owner-v1'
 const ownerChannelProtocol=protocol
 
 /** Install this only in a dedicated owner-origin frame, never in the app host. */
-export function installNativeOwnerHost(options:{allowedParentOrigin:string;workerURL:string|URL;assetBaseURL?:string;runtimeCandidates?:readonly NativeRuntimeCandidate[];previewOrigin?:string;previewHostSuffix?:string;buildId?:string;maxTerminalOutputBytes?:number}){
+export function installNativeOwnerHost(options:{allowedParentOrigin:string;workerURL:string|URL;assetBaseURL?:string;runtimeCandidates?:readonly NativeRuntimeCandidate[];previewOrigin?:string;previewHostSuffix?:string;buildId?:string;maxTerminalOutputBytes?:number;packageDownloadPolicy?:PackageDownloadPolicy}){
+  const packageDownloadPolicy=normalizePackageDownloadPolicy(options.packageDownloadPolicy)
   const maxTerminalOutputBytes=new NativeTerminalCapture(options.maxTerminalOutputBytes).maxBytes
   const buildId=nativeOwnerBuildId(options.buildId)
   const parentOrigin=new URL(options.allowedParentOrigin).origin
@@ -142,20 +145,32 @@ export function installNativeOwnerHost(options:{allowedParentOrigin:string;worke
           case 'start':{
             if(server||startupController)throw Error('Owner already has a running or starting project')
             ownsStartup=startupController=new AbortController()
+            const startedAt=performance.now()
+            const progress=(phase:string,durationMs?:number)=>{
+              // Progress delivery must not change startup results or cancellation.
+              try{port?.postMessage({protocol,type:'event',event:{type:'progress',phase,
+                elapsedMs:Math.round(performance.now()-startedAt),
+                ...(durationMs===undefined?{}:{durationMs})} satisfies NativeDevServerEvent})}catch{}
+            }
+            progress('owner-start-request-received')
             const {previewPort,...serverOptions}=data.options as OwnerOptions
-            const options={...serverOptions,workerURL,runtimeCandidates,assetBaseURL}
+            const options={...serverOptions,workerURL,runtimeCandidates,assetBaseURL,packageDownloadPolicy}
             let files=data.files as Record<string,string|Uint8Array>
             if(runtimeCandidates&&options.installDependencies!==false){
               const root=options.workspaceRoot??'/app'
+              const preparationStarted=performance.now()
+              progress('owner-runtime-preparation-started')
               const prepared=await prepareNativeRuntime(mountNativeWorkspaceFiles(files,root),runtimeCandidates,
-                {lock:options.lock,signal:ownsStartup.signal})
+                {lock:options.lock,signal:ownsStartup.signal,packageDownloadPolicy})
               ownsStartup.signal.throwIfAborted()
               files=Object.fromEntries(Object.entries(prepared.files).map(([path,value])=>[root+path.slice('/app'.length),value]))
               options.lock=prepared.lock
+              progress('owner-runtime-preparation-completed',Math.round(performance.now()-preparationStarted))
             }
             server=new NativeDevServer(files,options)
             restartOptions=options;requestedPreviewPort=previewPort
             unsubscribe=server.subscribeEvents(event=>port?.postMessage({protocol,type:'event',event}))
+            progress('owner-worker-created')
             value=await server.waitForHTTPReady({port:previewPort})
             ownsStartup.signal.throwIfAborted()
             selectedPort=value as number
@@ -165,7 +180,7 @@ export function installNativeOwnerHost(options:{allowedParentOrigin:string;worke
             if(server||startupController)throw Error('Owner already has a running or starting project')
             ownsStartup=startupController=new AbortController()
             const {previewPort,...serverOptions}=data.options as OwnerOptions
-            const options={...serverOptions,workerURL,runtimeCandidates,assetBaseURL}
+            const options={...serverOptions,workerURL,runtimeCandidates,assetBaseURL,packageDownloadPolicy}
             const restoreStarted=performance.now()
             const progress=(phase:string)=>port?.postMessage({protocol,type:'event',event:{
               type:'progress',phase,elapsedMs:Math.round(performance.now()-restoreStarted),

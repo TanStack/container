@@ -26,11 +26,12 @@ import {getNativeFilesystemProvider} from './filesystem-provider.mjs'
 import {installLiveLockedPackages} from './live-package-install'
 import {installLockedPackages,PackageInstallCache} from '../npm/install'
 import {planProjectInstall,resolveProjectLock} from '../npm/project'
+import {normalizePackageDownloadPolicy} from '../npm/download-policy'
+import type {PackageDownloadPolicy} from '../npm/download-policy'
 import {nativeInstallResult} from './install-result'
 import type {ProjectInstallResult} from '../npm/project'
 import type {PackageIdentity,RuntimeLock} from '../npm/types'
 import {normalizePath} from '../fs/path'
-import {transformSync} from '@babel/core'
 import {ESModulesEvaluator} from 'vite/module-runner'
 import * as nodeUrl from '../vite-browser/node-url'
 import * as nodePath from '../vite-browser/node-path'
@@ -98,6 +99,7 @@ import {trackIpcChannelLifetime} from './ipc-channel-lifetime'
 import {NativeStdioTransport} from './stdio-transport'
 import {NativeInputLifetime} from './input-lifetime'
 import {asyncContextTransform} from './async-context-transform'
+import {browserCommonJSDefines,browserCommonJSDependencies} from './browser-commonjs-source'
 import {resolveRuntimeAssetBase} from '../sandbox/runtime-assets'
 import type {Plugin} from 'vite'
 
@@ -213,7 +215,7 @@ const commonJS=new BrowserCommonJS(resolved=>{
   if(!resolved)throw Error(`Cannot resolve dynamic import ${specifier} from ${from}`)
   const release=keepNodeCommandAlive()
   return (async()=>{
-    try{if(nativeCommandWorker)await ensureThreadEnvironment()}
+    try{if(nativeCommandWorker||nativeWorkerThread)await ensureThreadEnvironment()}
     finally{release()}
     if(!configEnvironment||!('runner' in configEnvironment))throw Error('Module runner is unavailable')
     return threadModuleLoads.load(resolved,()=>configEnvironment!.runner.import(resolved))
@@ -295,6 +297,7 @@ async function workspaceViteConfig(inlineConfig:Record<string,unknown>={}){
   let userConfig:Record<string,unknown>={}
   const configPath=['/app/vite.config.ts','/app/vite.config.js','/app/vite.config.mts','/app/vite.config.mjs'].find(path=>nodeFs.existsSync(path))
   if(configPath){
+    if(!configEnvironment)await ensureThreadEnvironment()
     const runner=(configEnvironment as {runner?:{import:(path:string)=>Promise<{default:unknown}>}}|undefined)?.runner
     if(!runner)throw Error('Workspace module runner is unavailable for Vite config')
     const exported=(await runner.import(configPath)).default
@@ -372,17 +375,15 @@ const commonJSPlugin:Plugin={
       .filter(name=>/^[A-Za-z_$][\w$]*$/.test(name)&&name!=='default')
     const named=names.map((name,index)=>`const __cjs_export_${index}=__cjs[${JSON.stringify(name)}];export {__cjs_export_${index} as ${name}};`).join('\n')
     if(serverSide)return `const __cjs=globalThis[Symbol.for('web-container:commonjs')](${JSON.stringify(id)});export default __cjs;\n${named}`
-    const dependencies=new Set<string>()
-    transformSync(source,{babelrc:false,configFile:false,sourceType:'script',filename:id,
-      parserOpts:{allowReturnOutsideFunction:true},plugins:[()=>({visitor:{CallExpression(path:any){
-        const call=path.node
-        if(call.callee.type==='Identifier'&&call.callee.name==='require'&&
-          call.arguments.length===1&&call.arguments[0]?.type==='StringLiteral'&&
-          !path.scope.hasBinding('require'))dependencies.add(call.arguments[0].value)
-      }}})]})
+    const {prepareBrowserCommonJSSource}=await import('./browser-commonjs-compiler')
+    source=prepareBrowserCommonJSSource(source,id,browserCommonJSDefines(
+      this.environment.config.define??{},browserProcess.env.NODE_ENV||this.environment.config.mode,
+      {keepProcessEnv:this.environment.config.keepProcessEnv},
+    ))
+    const dependencies=browserCommonJSDependencies(source,id)
     const imports:string[]=[]
     const entries:string[]=[]
-    for(const [index,specifier] of [...dependencies].entries()){
+    for(const [index,specifier] of dependencies.entries()){
       const resolved=await this.resolve(specifier,id,{skipSelf:true})
       if(!resolved||resolved.external)throw Error(`Cannot resolve browser CommonJS dependency ${specifier} from ${id}`)
       imports.push(`import * as __cjs_import_${index} from ${JSON.stringify(resolved.id)};`)
@@ -744,6 +745,7 @@ let nextTerminalSession=0
 let liveInstallInProgress=false
 let liveInstallDrain:Promise<void>|undefined
 const liveInstallCache=new PackageInstallCache()
+let packageDownloadPolicy:PackageDownloadPolicy=normalizePackageDownloadPolicy()
 let installedManifestText:string|undefined
 let installedLockText:string|undefined
 let installedPackages:RuntimeLock|undefined
@@ -777,15 +779,15 @@ async function installNativeLivePackages(signal:AbortSignal,onProgress:(text:str
     let lockText=previousLock
     let planned:ReturnType<typeof planProjectInstall>|undefined
     if(lockText){
-      try{planned=planProjectInstall(manifest,lockText)}
+      try{planned=planProjectInstall(manifest,lockText,{packageDownloadPolicy})}
       catch(error){
         if(!(error instanceof Error)||!error.message.startsWith('Lockfile is out of sync with package.json:'))throw error
       }
     }
     if(!planned){
       onProgress('Resolving dependency lock...\n')
-      lockText=await resolveProjectLock(manifest,signal,liveInstallCache)
-      planned=planProjectInstall(manifest,lockText)
+      lockText=await resolveProjectLock(manifest,signal,liveInstallCache,undefined,packageDownloadPolicy)
+      planned=planProjectInstall(manifest,lockText,{packageDownloadPolicy})
     }
     if(planned.locals.length||planned.links.length)
       throw Object.assign(Error('Native project install does not yet support workspace links'),{code:'ERR_UNSUPPORTED_OPERATION'})
@@ -796,7 +798,7 @@ async function installNativeLivePackages(signal:AbortSignal,onProgress:(text:str
     let lastProgress=-1
     try{
       await installLiveLockedPackages(vol,installed,{
-        signal,cache:liveInstallCache,expectedManifest:manifest,expectedLock:previousLock,lockPath,
+        signal,cache:liveInstallCache,packageDownloadPolicy,expectedManifest:manifest,expectedLock:previousLock,lockPath,
         lockText:lockText===previousLock?undefined:lockText,
         onProgress:state=>{
           if(state.completed!==lastProgress){lastProgress=state.completed;onProgress(`Installed ${state.completed}/${state.total} packages...\n`)}
@@ -988,8 +990,6 @@ if(nestedThread){
         }
       }
       if(viteBuild)await ensureCommonJSBridge()
-      if(!nativeCommandWorker||data.evalSource===undefined&&!data.stdinSource&&!typecheckOnly&&!viteBuild)
-        await ensureThreadEnvironment()
       const runPreloads=async(waitForIdle?:()=>Promise<void>)=>{
         const {preloads,imports=[]}=parseLaunchFlags(data.execArgv??[])
         if(preloads.length)await ensureCommonJSBridge()
@@ -1084,6 +1084,7 @@ if(nestedThread){
             const release=keepNodeCommandAlive()
             commandEvaluationStarted=release
             try{
+              await ensureThreadEnvironment()
               const evaluation=configEnvironment!.runner.import(id).finally(release)
               return await awaitModuleEvaluation(evaluation,activity.waitForIdle)
             }finally{release();commandEvaluationStarted=undefined}
@@ -1092,7 +1093,7 @@ if(nestedThread){
             if(parseLaunchFlags(data.execArgv??[]).inputType==='module'){
               const id=nodePath.join(browserProcess.cwd(),'[eval1]')
               commandSourceModules.set(id,source)
-              try{await ensureThreadEnvironment();await importCommandModule(id)}
+              try{await importCommandModule(id)}
               catch(error){throw normalizeSourceError(error)}
               finally{commandSourceModules.delete(id)}
             }else commonJS.evaluate(source,resolveWorkerEntry('./'+identity,browserProcess.cwd()),identity)
@@ -1134,9 +1135,9 @@ if(nestedThread){
             if(result.diagnostics.some(diagnostic=>diagnostic.category===1))commandProcess.exitCode=2
           }else{
             threadProgress(`command-import-start:${entry}`)
-            const commandModule=await importCommandModule(entry) as Record<string,unknown>
+            const commandModule=(commonJS.isCommonJS(entry)?commonJS.load(entry):await importCommandModule(entry)) as Record<string,unknown>|null|undefined
             threadProgress(`command-import-complete:${entry}`)
-            const completion=commandModule.__promise
+            const completion=commandModule?.__promise
             if(completion&&typeof (completion as PromiseLike<unknown>).then==='function'){
               threadProgress('command-completion-pending')
               await completion
@@ -1175,7 +1176,11 @@ if(nestedThread){
           if(data.evalSource!==undefined){
             if(typeof data.evalSource!=='string')throw TypeError('Worker eval source must be a string')
             commonJS.evaluate(data.evalSource,resolveWorkerEntry(data.entry,browserProcess.cwd()),'[worker eval]')
-          }else await configEnvironment!.runner.import(resolveWorkerEntry(data.entry.startsWith('data:')?new URL(data.entry):data.entry,browserProcess.cwd()))
+          }else{
+            const entry=resolveWorkerEntry(data.entry.startsWith('data:')?new URL(data.entry):data.entry,browserProcess.cwd())
+            if(!entry.startsWith('data:')&&commonJS.isCommonJS(entry))commonJS.load(entry)
+            else{await ensureThreadEnvironment();await configEnvironment!.runner.import(entry)}
+          }
           await activity.waitForIdle()
           await nodeWorkerThreads.disposeNativeWorkers()
           ;(browserProcess as typeof browserProcess&{exit(code?:number):never}).exit()
@@ -1203,6 +1208,7 @@ if(nestedThread){
     switch(operation){
       case 'start':{
         if(server||configEnvironment)throw Error('Dev server already started')
+        packageDownloadPolicy=normalizePackageDownloadPolicy(data.packageDownloadPolicy)
         nativeRuntimeAssetBaseURL=resolveRuntimeAssetBase(data.assetBaseURL??'/runtime/',self.location.href)
         const restoringForInstall=!!data.restoreSnapshot&&data.installRequested===true
         const startedAt=performance.now()
@@ -1232,7 +1238,7 @@ if(nestedThread){
           if(!vol.existsSync('/app/package.json'))throw Error('Project lockfile requires package.json')
           try{
             const planned=planProjectInstall(readFileSync('/app/package.json','utf8') as string,
-              readFileSync(startupLockPath,'utf8') as string)
+              readFileSync(startupLockPath,'utf8') as string,{packageDownloadPolicy})
             if(planned.locals.length||planned.links.length)
               throw Object.assign(Error('Native project install does not yet support workspace links'),{code:'ERR_UNSUPPORTED_OPERATION'})
             requestedLock=planned.lock
@@ -1247,8 +1253,8 @@ if(nestedThread){
           if(!vol.existsSync('/app/package.json'))throw Error('Native project install requires package.json')
           progress('dependency-lock-resolving')
           resolvedLockText=await resolveProjectLock(readFileSync('/app/package.json','utf8') as string,
-            undefined,installCache,installActivity)
-          const planned=planProjectInstall(readFileSync('/app/package.json','utf8') as string,resolvedLockText)
+            undefined,installCache,installActivity,packageDownloadPolicy)
+          const planned=planProjectInstall(readFileSync('/app/package.json','utf8') as string,resolvedLockText,{packageDownloadPolicy})
           requestedLock=planned.lock
           installPlanResult=planned.result
           progress('dependency-lock-planned')
@@ -1263,7 +1269,7 @@ if(nestedThread){
           if(restoringForInstall&&vol.existsSync('/app/node_modules'))vol.rmSync('/app/node_modules',{recursive:true,force:true})
           await installLockedPackages(new VolumeFileSystem(vol),installed,
             state=>progress(`dependency-installed:${state.completed}/${state.total}`),undefined,installCache,
-            installActivity)
+            installActivity,packageDownloadPolicy)
           if(resolvedLockText)vol.writeFileSync(startupLockPath??'/app/package-lock.json',resolvedLockText)
           installedManifestText=vol.existsSync('/app/package.json')?String(readFileSync('/app/package.json','utf8')):undefined
           installedLockText=startupLockPath?String(readFileSync(startupLockPath,'utf8')):

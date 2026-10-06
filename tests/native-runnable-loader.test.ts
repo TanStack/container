@@ -112,4 +112,53 @@ describe('browser module fetch',()=>{
     expect(await environment.fetchModule('/app/node_modules/vite/dist/node/index.js'))
       .toEqual({externalize:'browser-native:vite',type:'builtin'})
   })
+
+  test.each([
+    ['prettier/index.mjs','prettier'],
+    ['esbuild/lib/main.js','esbuild'],
+    ['lightningcss/node/index.js','lightningcss'],
+    ['lightningcss/node/index.mjs','lightningcss'],
+    ['@tailwindcss/oxide/index.js','oxide'],
+  ])('resolves the Vite URL for %s before selecting its browser provider',async(entry,provider)=>{
+    const fetched:string[]=[]
+    const resolved:string[]=[]
+    const packageName=entry.split('/').slice(0,entry.startsWith('@')?2:1).join('/')
+    const environment={pluginContainer:{resolveId:async(id:string)=>{
+      resolved.push(id)
+      return {id:'/tmp/project/node_modules/'+entry}
+    }},fetchModule:async(id:string)=>{fetched.push(id);return {code:id}}}
+    installBrowserModuleFetch(environment)
+    expect(await environment.fetchModule('/node_modules/'+entry,'/app/main.mjs'))
+      .toEqual({externalize:'browser-native:'+provider+':'+encodeURIComponent('/tmp/project/node_modules/'+packageName),type:'builtin'})
+    expect(resolved).toEqual(['/node_modules/'+entry])
+    expect(fetched).toEqual([])
+  })
+
+  test('resolves a private package alias before selecting its browser provider',async()=>{
+    const fetched:string[]=[]
+    const environment={pluginContainer:{resolveId:async()=>({id:'/tmp/project/node_modules/prettier/index.mjs'})},
+      fetchModule:async(id:string)=>{fetched.push(id);return {code:id}}}
+    installBrowserModuleFetch(environment)
+    expect(await environment.fetchModule('#formatter','/tmp/project/main.mjs'))
+      .toEqual({externalize:'browser-native:prettier:%2Ftmp%2Fproject%2Fnode_modules%2Fprettier',type:'builtin'})
+    expect(fetched).toEqual([])
+  })
+
+  test('does not guess unresolved provider URLs or replace a plugin alias',async()=>{
+    const fetched:unknown[][]=[]
+    const events:string[]=[]
+    const options={cached:true}
+    const environment={pluginContainer:{resolveId:async(id:string)=>id.includes('esbuild')?{id:'/app/custom.mjs'}:null},
+      fetchModule:async(...args:unknown[])=>{fetched.push(args);return {code:args[0]}}}
+    installBrowserModuleFetch(environment,phase=>events.push(phase))
+    expect(await environment.fetchModule('/node_modules/prettier/index.mjs','/app/main.mjs',options))
+      .toEqual({code:'/node_modules/prettier/index.mjs'})
+    expect(await environment.fetchModule('/node_modules/esbuild/lib/main.js','/app/main.mjs',options))
+      .toEqual({code:'/app/custom.mjs'})
+    expect(fetched).toEqual([
+      ['/node_modules/prettier/index.mjs','/app/main.mjs',options],
+      ['/app/custom.mjs','/app/main.mjs',options],
+    ])
+    expect(events).toEqual(['start','end','start','end'])
+  })
 })

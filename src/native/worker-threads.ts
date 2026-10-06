@@ -187,6 +187,8 @@ export class Worker extends EventEmitter{
       argv:options.argv,cwd:options.cwd??browserProcess.cwd(),cwdBuffer:this.#command?undefined:getProcessDirectory(browserProcess.cwd()).buffer,evalSource,stdinSource:options.stdinSource,fork:options.fork,ipcSerialization:options.ipcSerialization,execArgv,
       inheritedInput:options.inheritedInput,filePort:channel.port2,fileLane:lane,portPort:portChannel.port2,portLane}
     this.#worker.onmessage=({data}:MessageEvent<ThreadMessage>)=>{
+      // A message already queued in the parent can arrive after child cleanup.
+      if(this.#closed)return
       if(data.type==='native-dev-progress'&&typeof data.phase==='string'){
         this.#phase=data.phase
         self.postMessage({type:'native-dev-progress',phase:`worker:${this.threadId}:${data.phase}`})

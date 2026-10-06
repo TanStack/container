@@ -5,6 +5,8 @@ import {startInstallPhase,traceInstallPhase,traceAsyncInstallPhase} from './inst
 import type { InstallProgress, LockedPackage, RuntimeLock } from './types'
 import {deletePackageRecord,loadPackageRecords,packageCacheTimestamp,readPackageRecord,writePackageRecord} from './package-cache-storage'
 import {cancellableWait} from './cancellable-wait'
+import {normalizePackageDownloadPolicy,packageDownloadURL} from './download-policy'
+import type {PackageDownloadPolicy} from './download-policy'
 
 interface CacheLimits {archiveBytes:number;archiveEntries:number;metadataBytes:number;metadataEntries:number}
 // Bound archive bytes independently from entry metadata, so normal dependency
@@ -191,10 +193,9 @@ async function decompressGzip(archive: Uint8Array, signal?: AbortSignal,onActivi
   return readBounded(decompressed, 64 * 1024 * 1024, signal,onActivity)
 }
 
-async function loadVerifiedArchive(resolved:string,integrity:string,signal?:AbortSignal,cache?:PackageInstallCache,onActivity?:()=>void){
-  const url=new URL(resolved)
-  if(url.protocol!=='https:'||url.hostname!=='registry.npmjs.org'||url.port||url.username||url.password||url.hash)
-    throw Error('Package downloads are restricted to https://registry.npmjs.org')
+async function loadVerifiedArchive(resolved:string,integrity:string,signal?:AbortSignal,cache?:PackageInstallCache,onActivity?:()=>void,policy?:PackageDownloadPolicy){
+  const url=packageDownloadURL(resolved,policy)
+  if(!/^sha512-[A-Za-z0-9+/]{86}==$/.test(integrity))throw Error('Package requires SHA-512 integrity')
   const load=async(sharedSignal=signal)=>{
     let response:Response
     try{response=await fetch(resolved,{signal:sharedSignal,credentials:'omit',redirect:'error'})}
@@ -224,8 +225,8 @@ async function loadVerifiedArchive(resolved:string,integrity:string,signal?:Abor
 }
 
 /** Inspect package manifests already included in a registry tarball. */
-export async function inspectBundledPackages(resolved:string,integrity:string,cache?:PackageInstallCache,signal?:AbortSignal,onActivity?:()=>void){
-  const archive=await loadVerifiedArchive(resolved,integrity,signal,cache,onActivity)
+export async function inspectBundledPackages(resolved:string,integrity:string,cache?:PackageInstallCache,signal?:AbortSignal,onActivity?:()=>void,policy?:PackageDownloadPolicy){
+  const archive=await loadVerifiedArchive(resolved,integrity,signal,cache,onActivity,policy)
   const files=extractTarFiles(await traceAsyncInstallPhase('gzip-decompression',()=>decompressGzip(archive,signal,onActivity)))
   const bundled:{path:string;manifest:Record<string,unknown>}[]=[]
   for(const file of files){
@@ -245,8 +246,9 @@ async function installPackage(
   signal?: AbortSignal,
   cache?:PackageInstallCache,
   onActivity?:()=>void,
+  policy?:PackageDownloadPolicy,
 ): Promise<void> {
-  const archive=await loadVerifiedArchive(lockedPackage.resolved,lockedPackage.integrity,signal,cache,onActivity)
+  const archive=await loadVerifiedArchive(lockedPackage.resolved,lockedPackage.integrity,signal,cache,onActivity,policy)
   onActivity?.()
   signal?.throwIfAborted()
   const tar = await traceAsyncInstallPhase('gzip-decompression',()=>decompressGzip(archive, signal,onActivity))
@@ -305,8 +307,15 @@ export async function installLockedPackages(
   signal?: AbortSignal,
   cache?:PackageInstallCache,
   onActivity?:()=>void,
+  policy?:PackageDownloadPolicy,
 ): Promise<void> {
   if (lock.version !== 1) throw new Error(`Unsupported runtime lock version '${lock.version}'`)
+  const configuredPolicy=normalizePackageDownloadPolicy(policy)
+  // Validate the complete graph before another package starts downloading.
+  for(const pkg of lock.packages){
+    packageDownloadURL(pkg.resolved,configuredPolicy)
+    if(!/^sha512-[A-Za-z0-9+/]{86}==$/.test(pkg.integrity))throw Error('Package requires SHA-512 integrity')
+  }
   const controller=new AbortController()
   const abort=()=>controller.abort(signal?.reason)
   if(signal?.aborted)abort()
@@ -317,7 +326,7 @@ export async function installLockedPackages(
     while (nextIndex < lock.packages.length) {
       controller.signal.throwIfAborted()
       const lockedPackage = lock.packages[nextIndex++]
-      try{await installPackage(fs, lockedPackage, controller.signal,cache,onActivity)}catch(error){controller.abort(error);throw error}
+      try{await installPackage(fs, lockedPackage, controller.signal,cache,onActivity,configuredPolicy)}catch(error){controller.abort(error);throw error}
       completed++
       onProgress?.({ completed, total: lock.packages.length, package: lockedPackage })
     }

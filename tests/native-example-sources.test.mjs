@@ -70,7 +70,7 @@ test('release browser plan uses installed inputs, original deadlines and no inhe
     assert.deepEqual(entry.args,['--test','--test-force-exit','--test-timeout=180000','/release/tests/native-owner-sdk.test.mjs'])
     assert.deepEqual(entry.options.env,{PATH:'/bin',NATIVE_SDK_BUNDLE_DIR:'/consumer/sdk',
       NATIVE_DEPLOYMENT_DIR:'/consumer/hosted',NATIVE_OWNER_RUNTIME_CATALOG:'1',
-      NATIVE_OWNER_PINNED_EXAMPLES:'1',NATIVE_TEST_BROWSER:entry.browser})
+      NATIVE_OWNER_PINNED_EXAMPLES:'1',NATIVE_OWNER_TIMINGS:'1',NATIVE_TEST_BROWSER:entry.browser})
   }
 })
 
@@ -91,4 +91,9 @@ test('acceptance runner identity binds the timing helper and notices changes or 
   // Remove only the test's own copied helper, never a source or installed file.
   unlinkSync(join(root,helper))
   assert.throws(()=>nativeReleaseRunnerIdentity(root),{code:'ENOENT'})
+})
+
+test('acceptance runner identity includes the pinned client readiness precondition',()=>{
+  const path='scripts/native-start-example-readiness.mjs'
+  assert.equal(nativeReleaseRunnerIdentity(process.cwd())[path],nativeExampleHash(readFileSync(path)))
 })

@@ -41,6 +41,12 @@ jobs:
             tests/sdk-external-assets.test.mjs \
             tests/runtime-package-setup.test.mjs \
             tests/sdk-split-adoption.test.mjs
+      - name: Check native terminal guide against public API declarations
+        run: node --test tests/native-package-guide.test.mjs
+      - name: Check locked package download policy
+        run: |
+          npx --no-install vitest run tests/package-download-policy.test.ts tests/project-install.test.ts tests/native-owner-startup.test.ts tests/native-terminal-output.test.ts tests/native-live-package-install.test.ts tests/native-prepare-runtime.test.ts tests/package-download-errors.test.ts tests/install-stream-cancellation.test.ts tests/install-cache-cancellation.test.ts --maxWorkers=2
+          node --test tests/native-owner-host-assets.test.mjs
       - name: Check guest Buffer compatibility against Node
         run: |
           node --test --test-concurrency=1 \
@@ -51,6 +57,7 @@ jobs:
       - name: Check full-site acceptance accounting
         run: |
           npm run test:native-site-harness
+          node --test tests/native-local-example-cache.test.mjs
           node --test tests/native-site-project-inputs.test.mjs
           node --test tests/native-browser-diagnostic.test.mjs
           node --test tests/native-terminal-viewport.test.mjs
@@ -59,17 +66,35 @@ jobs:
           node --test tests/native-terminal-screen.test.mjs
           node --test tests/native-terminal-settlement.test.mjs
       - name: Check Vite request diagnostics
-        run: npx --no-install vitest run tests/native-vite-request-observation.test.ts
+        run: |
+          npx --no-install vitest run tests/native-vite-request-observation.test.ts
+          node --test tests/native-cpu-trace.test.mjs tests/native-worker-cpu-profile.test.mjs
+          node --test tests/native-filesystem-traffic-observation.test.mjs
+      - name: Check Linux process and memory accounting
+        run: node --test tests/linux-owner-memory-observation.test.mjs tests/linux-process-cpu-observation.test.mjs
       - name: Check callable resolver probe accounting
         run: node --test tests/native-callable-resolver.test.mjs tests/native-vite-private-imports.test.mjs tests/native-owner-workflows.test.mjs
       - name: Check installed production matrix accounting
         run: node --test tests/native-owner-production.test.mjs tests/native-owner-timings.test.mjs tests/native-streaming-node-control.test.mjs
       - name: Check complete SDK repeat accounting
-        run: node --test tests/native-sdk-repeats.test.mjs
+        run: node --test tests/native-sdk-timings.test.mjs tests/native-sdk-repeats.test.mjs tests/native-owner-soak.test.mjs tests/native-owner-soak-accounting.test.mjs
       - name: Check native progress clocks and fatal diagnostics
-        run: npx --no-install vitest run tests/native-dev-server-fatal.test.ts tests/native-owner-progress-clock.test.ts
+        run: npx --no-install vitest run tests/native-dev-server-fatal.test.ts tests/native-owner-progress-clock.test.ts tests/native-owner-startup.test.ts tests/native-http-readiness.test.ts
+      - name: Check native worker startup and cleanup
+        run: |
+          npx --no-install vitest run tests/native-async-context-transform.test.ts tests/native-async-resource.test.ts
+          npx --no-install vitest run tests/native-worker-cleanup.test.ts tests/native-worker-owner-control.test.ts tests/native-command-input-transport.test.ts tests/worker-threads-builtins.test.ts tests/native-worker-entry.test.ts tests/native-worker-network.test.ts
+          node --test tests/native-worker-transfer-control.test.mjs
+      - name: Check HTTP response cleanup against Node
+        run: |
+          node --test tests/guest-http-final-cancellation.test.mjs
+          npx --no-install vitest run tests/guest-http-server-cancellation.test.ts tests/native-owner-http-cancellation.test.ts tests/worker-http.test.ts tests/worker-http-body.test.ts tests/native-http-status-text.test.ts tests/native-http-readiness.test.ts
       - name: Check private-import callback diagnostics against pinned Vite sources
         run: node --test tests/vite-private-callback-trace.test.mjs
+      - name: Check client transform invalidation against pinned Vite sources
+        run: node --test tests/vite-client-transform-invalidation.test.mjs
+      - name: Check native module evaluation and demand-driven updates
+        run: node --test tests/vite-module-evaluation.test.mjs
       - name: Check WASI file-proxy failure controls
         run: node --test tests/native-wasi-fs-proxy.test.mjs tests/wasi-fs-proxy-trace.test.mjs
       - name: Check synchronous native worker completion and pool reuse
@@ -78,6 +103,9 @@ jobs:
         run: |
           node --test tests/native-compiler-fs-lifecycle.test.mjs
           npx --no-install vitest run tests/native-compiler-fs-stat.test.ts tests/native-compiler-filesystem-registry.test.ts tests/native-node-fs.test.ts
+          npx --no-install vitest run tests/native-volume-resolver.test.ts tests/native-volume-resolver-probes.test.ts
+          npx --no-install vitest run tests/native-commonjs.test.ts tests/native-commonjs-classification.test.ts tests/native-commonjs-probes.test.ts tests/native-node-fs-optional-stat.test.ts tests/native-browser-commonjs-source.test.ts
+          node --test tests/native-filesystem-optional-stat.test.mjs
       - name: Check installer and terminal public filesystem operations
         run: |
           node --test tests/native-filesystem-operations.test.mjs tests/native-filesystem-async-api.test.mjs tests/native-filesystem-stream-api.test.mjs tests/native-filesystem-client-api.test.mjs tests/native-filesystem-stat-dates.test.mjs tests/native-filesystem-directory.test.mjs tests/native-disposal-symbols.test.mjs

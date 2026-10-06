@@ -2,6 +2,7 @@ import { chromium, firefox, webkit } from 'playwright'
 import { writeFile } from 'node:fs/promises'
 import { nativeTerminalFailureSnapshot, nativeTerminalViewport, renderedTerminalEdge, renderedTerminalScan } from './native-terminal-viewport.mjs'
 import { browserErrorText } from './native-browser-diagnostic.mjs'
+import { checkEditedPreview } from './native-edited-preview.mjs'
 
 const site = process.env.NATIVE_SITE_ORIGIN ?? 'http://127.0.0.1:4198'
 const preview = process.env.NATIVE_PREVIEW_ORIGIN ?? 'http://127.0.0.1:4199'
@@ -173,6 +174,7 @@ for (const [browserName, engine] of Object.entries(engines)) {
           page: (await page.locator('body').innerText({ timeout: 1000 }).catch(() => '')).slice(-2000),
           diagnostics: diagnostics.slice(-20),
         })}`, { cause: error }) }
+        await checkEditedPreview(page.frameLocator('iframe[title="Workspace preview"]'), example)
         await command('definitely-not-installed-command', 'Exited with code 127')
         await command('node -e "console.error(\'expected stderr\'); process.exitCode=7"', 'Exited with code 7')
         await input.focus()
@@ -250,6 +252,7 @@ for (const [browserName, engine] of Object.entries(engines)) {
         }
         await command('cat terminal-proof.txt', 'terminal proof')
         await page.frameLocator('iframe[title="Workspace preview"]').getByText(example.after, { exact: false }).waitFor({ timeout: 45000 })
+        await checkEditedPreview(page.frameLocator('iframe[title="Workspace preview"]'), example)
         console.log(`${browserName}: ${example.id} run ${repetition}/${repetitions} terminal, input, interrupt, failures, editor, live preview edit, build, resize, reopen, restart passed`)
         console.log('NATIVE_TERMINAL_WORKFLOW_OBSERVATION ' + JSON.stringify({ browser: browserName, example: example.id, repetition, lifecycleEvents }))
       } catch (error) {

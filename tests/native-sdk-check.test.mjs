@@ -119,6 +119,13 @@ test('native CI retains a failed build phase and cannot continue into packaging'
   assert.equal(report.passed,false);assert.equal(report.phase,'runtime build')
   assert.deepEqual(report.error,{name:'Error'})
 })
+test('native CI requires installed bootstrap cases on the identical package and browser runner',()=>{
+  const source=readFileSync('scripts/check-native-sdk.mjs','utf8')
+  assert.match(source,/report\.commandBootstrap=readNativeCommandBootstrapResults\(execute\('tests\/native-command-bootstrap-sdk\.test\.mjs'/)
+  assert.match(source,/NATIVE_COMMAND_BOOTSTRAP_CONTROL:'1'/)
+  assert.match(source,/assert\.deepEqual\(report\.commandBootstrap\.inputs\.identity,acceptanceIdentity/)
+  assert.match(source,/assert\.equal\(report\.commandBootstrap\.inputs\.runnerLockSHA256,report\.directories\.inputs\.runnerLockSHA256/)
+})
 test('private native CI cannot publish, change release gates or upload compiler artifacts',()=>{
   const workflow=readFileSync('.github/workflows/native-checks.yml','utf8')
   assert.match(workflow,/node-version-file: .nvmrc/)
@@ -129,4 +136,11 @@ test('private native CI cannot publish, change release gates or upload compiler 
   assert.match(workflow,/if: always\(\)/)
   assert.match(workflow,/path: test-results\/native-sdk-check.json/)
   assert.doesNotMatch(workflow,/pull_request_target|id-token: write|contents: write|secrets\.|npm publish|changeset|release:prepare|NPM_TOKEN|NODE_AUTH_TOKEN/)
+})
+test('native CI includes the complete same-owner soak on the identical installed package and browser inputs',()=>{
+  const source=readFileSync('scripts/check-native-sdk.mjs','utf8')
+  assert.match(source,/report\.ownerSoak=readNativeOwnerSoakResults\(execute\('tests\/native-owner-soak-sdk\.test\.mjs'/)
+  assert.match(source,/NATIVE_OWNER_SOAK:'1'/)
+  assert.match(source,/assert\.deepEqual\(report\.ownerSoak\.inputs\.identity,acceptanceIdentity/)
+  assert.match(source,/assert\.equal\(report\.ownerSoak\.inputs\.runnerLockSHA256,report\.directories\.inputs\.runnerLockSHA256/)
 })

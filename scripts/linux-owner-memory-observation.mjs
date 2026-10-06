@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import {createRequire} from 'node:module'
 import {createHash} from 'node:crypto'
-import {readFile,readdir} from 'node:fs/promises'
+import {readFile,readdir,readlink} from 'node:fs/promises'
+import {basename} from 'node:path'
 import {installNativeWorkerLifecycleObservation} from './native-worker-lifecycle-observation.mjs'
 
 export function linuxProcessMemory(status){
-  const name=status.match(/^Name:\s*(\S+)/m)?.[1]
+  const name=status.match(/^Name:[ \t]*([^\r\n]*)$/m)?.[1]
   const fields={}
   for(const [key,unit]of [['VmRSS','kB'],['RssAnon','kB'],['RssFile','kB'],['VmSize','kB'],['Threads','']]){
     const match=status.match(new RegExp('^'+key+':\\s*(\\d+)'+(unit?'\\s+'+unit:'')+'\\s*$','m'))
@@ -15,25 +16,32 @@ export function linuxProcessMemory(status){
 }
 
 export function linuxMemoryCounters(text){
+  const keys=new Set()
   return Object.fromEntries(text.trim().split('\n').filter(Boolean).map(line=>{
-    const match=line.match(/^([a-z_]+) (\d+)$/)
+    const match=line.match(/^([a-z_][a-z0-9_]*(?:\.[a-z_][a-z0-9_]*)*) (\d+)$/)
     assert.ok(match,'Unexpected Linux memory counter')
-    return [match[1],Number(match[2])]
+    const value=Number(match[2])
+    assert.ok(Number.isSafeInteger(value),'Unexpected Linux memory counter value')
+    assert.ok(!keys.has(match[1]),'Unexpected duplicate Linux memory counter')
+    keys.add(match[1])
+    return [match[1],value]
   }))
 }
 
-export async function readLinuxOwnerMemory(){
+export async function readLinuxOwnerMemory({read=readFile,list=readdir,link=readlink}={}){
   const processes=[]
-  for(const pid of (await readdir('/proc')).filter(value=>/^\d+$/.test(value))){
-    let status
-    try{status=await readFile('/proc/'+pid+'/status','utf8')}
+  for(const pid of (await list('/proc')).filter(value=>/^\d+$/.test(value))){
+    let status,executable
+    try{[status,executable]=await Promise.all([read('/proc/'+pid+'/status','utf8'),link('/proc/'+pid+'/exe')])}
     catch(error){if(['ENOENT','ESRCH'].includes(error.code))continue;throw error}
     const row=linuxProcessMemory(status)
-    if(['WPEWebProcess','WPENetworkProcess','MiniBrowser','node'].includes(row.name))
-      processes.push({pid:Number(pid),...row})
+    // Linux task names can be renamed or truncated. Node 24 reports MainThread.
+    // Keep the task name as metadata, select the actual executable instead.
+    if(['WPEWebProcess','WPENetworkProcess','MiniBrowser','node'].includes(basename(executable)))
+      processes.push({pid:Number(pid),executable,...row})
   }
   const [current,peak,events,stats]=await Promise.all(['memory.current','memory.peak','memory.events','memory.stat']
-    .map(name=>readFile('/sys/fs/cgroup/'+name,'utf8')))
+    .map(name=>read('/sys/fs/cgroup/'+name,'utf8')))
   assert.match(current.trim(),/^\d+$/)
   assert.match(peak.trim(),/^\d+$/)
   return {currentBytes:Number(current),peakBytes:Number(peak),events:linuxMemoryCounters(events),

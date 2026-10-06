@@ -19,4 +19,8 @@ export async function bootstrapNativeFilesystem(){
     cwd:()=> (globalThis as typeof globalThis & {process?:{cwd?:()=>string}}).process?.cwd?.()??'/app',
     createAsyncResource:name=>new NativeAsyncResource(name),keepAlive:keepNodeCommandAlive,
   }))
+  // Every worker owns a compiler filesystem, even when its first compiler is
+  // loaded by a command or thread rather than Rolldown. Import only after the
+  // remote provider is installed, so node:fs cannot create a local fallback.
+  await import('./compiler-filesystem')
 }

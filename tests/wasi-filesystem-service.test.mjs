@@ -22,8 +22,9 @@ class Port extends EventTarget{
   postMessage(data){this.dispatchEvent(new MessageEvent('message',{data}))}
 }
 function fixture(){
-  const {fs}=memfs(),handlers=[]
+  const {fs}=memfs(),handlers=[],endpoints=[]
   const service=createWasiFilesystemService(fs,endpoint=>{
+    endpoints.push(endpoint)
     const handler=codec.createOnMessage(endpoint);handlers.push(handler);return handler
   })
   const connect=id=>{
@@ -31,8 +32,52 @@ function fixture(){
     assert.equal(port.started,true)
     return {port,fs:createWasiFilesystemClient(fs,{decodeValue:codec.decodeValue,send:message=>port.postMessage(message)})}
   }
-  return {fs,service,handlers,connect}
+  return {fs,service,handlers,endpoints,connect}
 }
+
+test('endpoint method inspection reuses wrappers without caching file results',()=>{
+  const f=fixture(),client=f.connect('main'),endpoint=f.endpoints[0]
+  try{
+    const first=Object.fromEntries(Object.entries(endpoint)),second=Object.fromEntries(Object.entries(endpoint))
+    for(const [name,value]of Object.entries(first))
+      if(typeof value==='function')assert.equal(second[name],value,name+' wrapper changed')
+    client.fs.writeFileSync('/file','first')
+    const read=endpoint.readFileSync,stat=endpoint.statSync
+    assert.equal(read('/file','utf8'),'first');assert.equal(stat('/file').size,5)
+    client.fs.writeFileSync('/file','second value')
+    assert.equal(read('/file','utf8'),'second value');assert.equal(stat('/file').size,12)
+    client.fs.unlinkSync('/file');assert.throws(()=>stat('/file'),error=>error.code==='ENOENT')
+  }finally{f.service.dispose()}
+})
+
+test('changed backend methods get new wrappers and captured methods keep their original behavior',()=>{
+  const f=fixture();f.connect('main')
+  const endpoint=f.endpoints[0],original=f.fs.readFileSync,captured=endpoint.readFileSync
+  try{
+    f.fs.writeFileSync('/file','original')
+    let calls=0
+    f.fs.readFileSync=function(...args){assert.equal(this,f.fs);calls++;return Reflect.apply(original,this,args)}
+    const replacement=endpoint.readFileSync
+    assert.notEqual(replacement,captured);assert.equal(endpoint.readFileSync,replacement)
+    assert.equal(captured('/file','utf8'),'original');assert.equal(calls,0)
+    assert.equal(replacement('/file','utf8'),'original');assert.equal(calls,1)
+    f.fs.readFileSync=undefined;assert.equal(endpoint.readFileSync,undefined)
+    f.fs.readFileSync=original;assert.equal(endpoint.readFileSync('/file','utf8'),'original')
+  }finally{f.fs.readFileSync=original;f.service.dispose()}
+})
+
+test('reused open and close wrappers keep tracking every descriptor',()=>{
+  const f=fixture();f.connect('main')
+  const endpoint=f.endpoints[0],open=endpoint.openSync,close=endpoint.closeSync
+  try{
+    const first=open('/first','w'),second=open('/second','w')
+    assert.equal(f.service.inspect().descriptors,2)
+    close(first);assert.equal(f.service.inspect().descriptors,1)
+    close(second);assert.equal(f.service.inspect().descriptors,0)
+    const third=open('/third','w');assert.equal(f.service.inspect().descriptors,1)
+    f.service.release('main');assert.throws(()=>f.fs.fstatSync(third),error=>error.code==='EBADF')
+  }finally{f.service.dispose()}
+})
 
 test('independent compiler endpoints read and change one authoritative filesystem',()=>{
   const f=fixture(),first=f.connect('main'),second=f.connect('thread')

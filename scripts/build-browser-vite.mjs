@@ -7,12 +7,15 @@ import { fileURLToPath } from 'node:url'
 import {addPackageNotices} from './package-notices.mjs'
 import {transformToolchainDynamicImports} from './toolchain-dynamic-imports.mjs'
 import {traceVitePrivateCallback} from './vite-private-callback-trace.mjs'
+import {retryInvalidatedViteClientTransform} from './vite-client-transform-invalidation.mjs'
+import {coordinateViteModuleEvaluationClient,coordinateViteModuleEvaluationCompiler} from './vite-module-evaluation.mjs'
 import {canonicalCompilerPackageRoot,isCompilerPackageImporter} from './compiler-package-paths.mjs'
 import {compilerInputPaths} from './compiler-input-paths.mjs'
 import {browserCompilerWorkerPool} from './compiler-worker-pool.mjs'
 import {replaceWasiFsProxy} from './wasi-fs-proxy-transport.mjs'
 import {sizeCompilerMemoryBinding} from './compiler-wasm-memory.mjs'
 import {addCompilerBootstrapProgress} from './compiler-bootstrap-progress.mjs'
+import {compilerBrowserHostPlugin} from './compiler-host-target.mjs'
 
 const require = createRequire(import.meta.url)
 const projectRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)))
@@ -63,6 +66,11 @@ const [viteClientEntry,viteEnvEntry]=await Promise.all([
   readFile(path.join(vitePackageRoot,'dist/client/client.mjs'),'utf8'),
   readFile(path.join(vitePackageRoot,'dist/client/env.mjs'),'utf8'),
 ])
+const moduleEvaluationEnabled=browserViteVersion.startsWith('8.')&&
+  process.env.BROWSER_VITE_ENTRY_POINT?.endsWith('/src/native/dev-server-vite8-bootstrap.worker.ts')
+const browserViteClientEntry=moduleEvaluationEnabled
+  ? coordinateViteModuleEvaluationClient(viteClientEntry)
+  : viteClientEntry
 
 const aliases = new Map([
   ['assert', 'assert'], ['node:assert', 'assert'],
@@ -122,6 +130,12 @@ aliases.set('node:console',path.join(sourceRoot,'node-console.ts'))
 aliases.set('tls',path.join(sourceRoot,'node-tls.ts'))
 aliases.set('node:tls',path.join(sourceRoot,'node-tls.ts'))
 const bundledInputs=new Set()
+if(moduleEvaluationEnabled)bundledInputs.add(path.join(projectRoot,'scripts/vite-module-evaluation.mjs'))
+const compilerHostTargets=new Map()
+const compilerHostPlugin=compilerBrowserHostPlugin(target=>{
+  compilerHostTargets.set(target.name+'@'+target.version,target)
+  bundledInputs.add(path.join(projectRoot,'scripts/compiler-host-target.mjs'))
+})
 const compilerMemories={}
 const sizeCompilerBinding=async(name,source,wasmPath)=>{
   if(compilerMemories[name])throw Error('Compiler memory binding applied more than once: '+name)
@@ -170,7 +184,7 @@ if(rolldownPackageRoot){
     bundle:true,platform:'browser',format:'esm',target:'es2022',
     nodePaths:[path.join(projectRoot,'node_modules'),...(process.env.BROWSER_VITE_NODE_PATH?[path.resolve(process.env.BROWSER_VITE_NODE_PATH)]:[])],
     metafile:true,
-    plugins:[wasiTransportPlugin('worker'),{name:'direct-compiler-filesystem-bootstrap',setup(bundler){
+    plugins:[compilerHostPlugin,wasiTransportPlugin('worker'),{name:'direct-compiler-filesystem-bootstrap',setup(bundler){
       bundler.onLoad({filter:/wasi-worker-browser\.mjs$/},async args=>({
         contents:`import {installWasiFilesystemBootstrap} from ${JSON.stringify(wasiBootstrapModule)}\ninstallWasiFilesystemBootstrap('1.2.4')\n`+await readFile(args.path,'utf8'),
         loader:'js',resolveDir:path.dirname(args.path),
@@ -196,7 +210,7 @@ if(oxidePackageRoot){
     format:'esm',
     target:'es2022',
     logLevel:'warning',
-    plugins:[wasiTransportPlugin('oxide'),{name:'oxide-preloaded-browser-workers',setup(bundler){
+    plugins:[compilerHostPlugin,wasiTransportPlugin('oxide'),{name:'oxide-preloaded-browser-workers',setup(bundler){
       bundler.onLoad({filter:/wasi-worker-browser\.mjs$/},async args=>{
         const source=await readFile(args.path,'utf8'),handler='new MessageHandler({'
         if(source.split(handler).length!==2)throw Error('Pinned Oxide worker message handler changed')
@@ -243,12 +257,14 @@ if(oxidePackageRoot){
 }
 
 let privateCallbackTraceApplied = 0
+let invalidatedClientTransformRetryApplied = 0
+let moduleEvaluationCompilerApplied = 0
 if(rolldownPackageRoot&&oxidePackageRoot)recordInputs(await build({
   absWorkingDir:projectRoot,entryPoints:[path.join(projectRoot,'src/native/filesystem-owner.worker.mjs')],
   outfile:path.join(outputRoot,'filesystem-owner.mjs'),bundle:true,platform:'browser',format:'esm',target:'es2022',
   alias:{'node:path':'path-browserify','node:events':'events','node:buffer':'buffer','node:stream':'stream-browserify'},
   metafile:true,inject:[path.join(sourceRoot,'globals.ts')],
-  plugins:[filesystemCodecPlugin,wasiTransportPlugin('main')],
+  plugins:[compilerHostPlugin,filesystemCodecPlugin,wasiTransportPlugin('main')],
 }))
 recordInputs(await build({
   absWorkingDir: projectRoot,
@@ -258,7 +274,7 @@ recordInputs(await build({
     __START_CLIENT_ENTRY__: JSON.stringify(startClientEntry),
     __START_SERVER_ENTRY__: JSON.stringify(startServerEntry),
     __START_INSTANCE_ENTRY__: JSON.stringify(startInstanceEntry),
-    __VITE_CLIENT_ENTRY__: JSON.stringify(viteClientEntry),
+    __VITE_CLIENT_ENTRY__: JSON.stringify(browserViteClientEntry),
     __VITE_ENV_ENTRY__: JSON.stringify(viteEnvEntry),
     __BROWSER_ROLLDOWN_VERSION__: JSON.stringify(browserRolldownVersion),
     __BROWSER_VITE_VERSION__: JSON.stringify(browserViteVersion),
@@ -282,7 +298,7 @@ recordInputs(await build({
   sourcemap: false,
   target: ['es2022'],
   metafile:true,
-  plugins: [filesystemCodecPlugin,wasiTransportPlugin('main'),{
+  plugins: [compilerHostPlugin,filesystemCodecPlugin,wasiTransportPlugin('main'),{
     name: 'vite-browser-aliases',
     setup(build) {
       if(browserViteVersion.startsWith('8.')&&process.env.BROWSER_VITE_ENTRY_POINT?.endsWith('/src/native/dev-server-vite8-bootstrap.worker.ts'))
@@ -290,6 +306,13 @@ recordInputs(await build({
           if(!isCompilerPackageImporter(vitePackageRoot,args.path))return
           const relative=path.relative(vitePackageRoot,args.path)
           let source=await readFile(args.path,'utf8')
+          if(relative.split(path.sep).join('/')==='dist/node/chunks/node.js'){
+            source=coordinateViteModuleEvaluationCompiler(source)
+            moduleEvaluationCompilerApplied++
+            source=retryInvalidatedViteClientTransform(source)
+            invalidatedClientTransformRetryApplied++
+            bundledInputs.add(path.join(projectRoot,'scripts/vite-client-transform-invalidation.mjs'))
+          }
           if(process.env.BROWSER_VITE_RESOLVE_CALLBACK_TRACE==='1'&&relative.split(path.sep).join('/')==='dist/node/chunks/node.js'){
             source=traceVitePrivateCallback(source)
             privateCallbackTraceApplied++
@@ -381,12 +404,19 @@ recordInputs(await build({
 
 if(process.env.BROWSER_VITE_RESOLVE_CALLBACK_TRACE==='1'&&privateCallbackTraceApplied!==1)
   throw Error('Callback diagnostic build requires exactly one applied Vite callback transform')
+if(browserViteVersion.startsWith('8.')&&process.env.BROWSER_VITE_ENTRY_POINT?.endsWith('/src/native/dev-server-vite8-bootstrap.worker.ts')&&invalidatedClientTransformRetryApplied!==1)
+  throw Error('Native Vite build requires exactly one invalidated client transform correction')
+if(moduleEvaluationEnabled&&moduleEvaluationCompilerApplied!==1)
+  throw Error('Native Vite build requires matching client and compiler module lifetime corrections')
 if(rolldownPackageRoot&&(!wasiTransportApplied.main||!wasiTransportApplied.worker))
   throw Error('WASI filesystem transport requires matching host and worker endpoints')
 if(oxidePackageRoot&&!wasiTransportApplied.oxide)
   throw Error('Oxide filesystem transport requires matching host and worker endpoints')
 if(rolldownPackageRoot&&!compilerMemories.rolldown||oxidePackageRoot&&!compilerMemories.oxide)
   throw Error('Compiler memory sizing requires every configured binding')
+for(const identity of [...(rolldownPackageRoot?['@emnapi/core@2.0.0-alpha.5','@emnapi/wasi-threads@2.1.0']:[]),
+  ...(oxidePackageRoot?['@emnapi/core@1.11.1','@emnapi/wasi-threads@1.2.2']:[])])
+  if(!compilerHostTargets.has(identity))throw Error('Compiler browser host target was not applied: '+identity)
 
 const packageRoots=new Set([vitePackageRoot,lightningcssWasmRoot,lightningcss132WasmRoot,
   path.join(projectRoot,'node_modules/esbuild-wasm'),
@@ -416,7 +446,10 @@ await writeFile(path.join(outputRoot,'SHIPPED-INPUTS.json'),JSON.stringify({form
   }}:{}),
   toolchain:{vite:browserViteVersion,rolldown:browserRolldownVersion||null,
     lightningcss:browserLightningcssVersion,prettier:browserPrettierVersion},
+  ...(invalidatedClientTransformRetryApplied?{compatibilityCorrections:{retryInvalidatedClientTransform:true,
+    ...(moduleEvaluationEnabled?{nativeModuleEvaluationOwnership:true,demandDrivenModuleObservation:true}:{})}}:{}),
   compilerMemories,
+  compilerHostTargets:[...compilerHostTargets.values()].sort((a,b)=>(a.name+'@'+a.version).localeCompare(b.name+'@'+b.version)),
   noticeTextCoverageComplete:missingNoticeText.length===0,
   distributionReviewComplete:false,
   missingNoticeText,

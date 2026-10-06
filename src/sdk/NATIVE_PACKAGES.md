@@ -84,11 +84,75 @@ commands are validated, they do not run a host package manager. Unsupported
 scripts or compiler versions fail explicitly. This is browser Node API
 compatibility, not a native Node binary, OS container or full Node guarantee.
 
+The native installer does not yet support npm workspace links or local `file:`
+dependency links. Both startup and live installation reject them explicitly.
+
 The owner supports files, snapshots, checkpoints, restart, guest HTTP streaming,
 WebSockets, terminal commands and live output. Project HTTP request bodies are
 currently buffered. Subscribe to events for startup and guest logs. Dispose the
 owner before removing its iframe. The native owner is a separate-origin
 execution boundary, not permission to expose credentials or sensitive projects.
+
+## Locked package URLs
+
+The installer accepts npm registry archives by default. To use another HTTPS
+package host, configure its exact origin when creating the owner assets:
+
+```js
+const owner = createNativeOwnerHostAssets({
+  parentOrigin: 'https://app.example',
+  previewOrigin: 'https://preview.example',
+  runtimeCandidates: readNativeRuntimeCandidates(),
+  packageDownloadPolicy: {additionalOrigins: ['https://packages.example']},
+})
+```
+
+Supply a normal npm lockfile with resolved package URLs and SHA-512 integrity.
+Generate it with npm before mounting the project. URL dependencies without a
+lockfile are not supported yet. Downloads omit credentials and do not follow
+redirects. The owner host captures this configuration, projects cannot expand
+it through `NativeOwnerClient.start`, a file edit or a terminal install. This
+controls the installer, it does not turn browser-native execution into a
+security boundary for arbitrary untrusted code.
+
+## Terminal
+
+Open one shell session per terminal pane. It keeps the working directory,
+variables and shell functions between commands. Run one foreground command at
+a time. Here, `terminal` is your display, such as an xterm instance:
+
+```js
+const shell = await client.openTerminalSession('/project')
+try {
+  const command = shell.runCommand(
+    'cat',
+    text => terminal.write(text),
+    { columns: 80, rows: 24 },
+  )
+  command.writeInput('hello\n')
+  command.endInput()
+  const result = await command.result
+  console.log(result.exitCode, result.cwd)
+} finally {
+  await shell.dispose()
+}
+```
+
+Wire terminal input to `command.writeInput`, Ctrl-D to `command.endInput`,
+Ctrl-C to `command.interrupt`, and size changes to `command.resize(columns, rows)`.
+Output callbacks receive text and a `stdout` or `stderr` stream name. Await
+`command.result` before starting the next command. Dispose the shell when its
+pane closes. The host supplies the prompt, line editing and command history.
+
+For a single command without persistent shell state, use
+`client.openTerminalCommand(line, cwd, onOutput)`. Its control also provides
+`writeInputAcknowledged` for streamed input with backpressure. Input chunks
+must be nonempty and at most 64 KiB. `client.terminalCommand` is the simpler
+output-only command API.
+
+These commands share the preview's files and installed JavaScript packages.
+They are browser-hosted shell and Node-compatible commands, not an OS terminal
+or a full PTY. Native executables and unsupported interpreters do not run.
 
 ## Agent tools
 

@@ -233,7 +233,8 @@ function liveStat(path:unknown,follow:boolean,options?:NativeStatOptions){
       return follow?fs.statSync(target as never,options as never):fs.lstatSync(target as never,options as never)
     return toNodeStat(liveClient().call(follow?'stat':'lstat',[target]) as LiveStat,options?.bigint===true)
   }catch(error){
-    if(options?.throwIfNoEntry===false&&(error as {code?:string}).code==='ENOENT')return undefined
+    const code=(error as {code?:string}).code
+    if(options?.throwIfNoEntry===false&&(code==='ENOENT'||follow&&code==='ENOTDIR'))return undefined
     throw error
   }
 }

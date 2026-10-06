@@ -1,22 +1,25 @@
 import {afterEach,expect,it,vi} from 'vitest'
 
-const state=vi.hoisted(()=>({workers:[] as any[],fileCloses:0,portCloses:0,watchCloses:0}))
+const state=vi.hoisted(()=>({workers:[] as any[],fileCloses:0,portCloses:0,watchCloses:0,portOpens:0,portStops:0}))
 vi.mock('../src/vite-browser/node-fs',()=>({vol:{},readVolume:()=>({}),getNativeSyncFileClient:()=>undefined}))
-vi.mock('../src/native/worker-network',()=>({forwardWorkerPort:()=>()=>{}}))
+vi.mock('../src/native/worker-network',()=>({forwardWorkerPort:()=>{
+  state.portOpens++
+  return ()=>state.portStops++
+}}))
 vi.mock('../src/vite-browser/runtime-network',()=>({network:{}}))
 vi.mock('../src/native/workspace-events',()=>({observeWorkspaceEvents:()=>({close:()=>state.watchCloses++})}))
 vi.mock('../src/native/sync-file-bridge',()=>({createNativeSyncFileLane:()=>({}),NativeSyncFileHost:class{
   files={changedPaths:new Set()};close(){state.fileCloses++}
 }}))
 vi.mock('../src/native/sync-port-bridge',()=>({createNativeSyncPortLane:()=>({}),NativeSyncPortHost:class{
-  close(){state.portCloses++}
+  owns(){return false} close(){state.portCloses++}
 }}))
 import {Worker,disposeNativeWorkers,enterNativeThread,receiveNativeThreadMessage,parentPort,receiveMessageOnPort} from '../src/native/worker-threads'
 import {beginNodeCommandTimerActivity} from '../src/vite-browser/node-timers'
 import browserProcess from 'process/browser'
 
 function setup(){
-  state.workers=[];state.fileCloses=0;state.portCloses=0;state.watchCloses=0
+  state.workers=[];state.fileCloses=0;state.portCloses=0;state.watchCloses=0;state.portOpens=0;state.portStops=0
   vi.stubGlobal('self',{location:{href:'https://sandbox.test/runtime.js'},postMessage:vi.fn()})
   vi.stubGlobal('MessageChannel',class{port1={};port2={}})
   vi.stubGlobal('Worker',class{
@@ -222,6 +225,40 @@ it('ignores late exit messages after termination',async()=>{
   state.workers[0].onmessage({data:{type:'native-thread-exit',code:7}})
   expect(exit).toHaveBeenCalledExactlyOnceWith(0)
   expect(state.fileCloses).toBe(1)
+})
+
+it.each(['terminate','exit','error'] as const)('ignores all late worker messages after %s',async ending=>{
+  setup()
+  const worker=new Worker('/app/child.js',{command:true}),raw=state.workers[0]
+  const events:string[]=[]
+  for(const name of ['online','message','input-demand','disconnect','stdout','stderr','stdout-bytes','error','exit'])
+    worker.on(name,()=>events.push(name))
+  if(ending==='terminate')await worker.terminate()
+  else if(ending==='exit')raw.onmessage({data:{type:'native-thread-exit',code:0}})
+  else raw.onerror({message:'Startup failed'})
+  events.length=0
+  const sent=raw.sent.length
+  for(const data of [
+    {type:'native-thread-bootstrap-ready'},
+    {type:'native-thread-ready'},
+    {type:'native-dev-progress',phase:'rolldown-loaded'},
+    {type:'native-thread-message',value:'retired'},
+    {type:'native-thread-input-demand'},
+    {type:'native-thread-disconnect'},
+    {type:'native-thread-output',stream:'stdout',text:'retired'},
+    {type:'native-thread-output',stream:'stderr',text:'retired'},
+    {type:'native-thread-output',stream:'stdout',bytes:new Uint8Array([1]),outputId:1},
+    {type:'native-thread-port',event:{type:'open',port:4501}},
+    {type:'native-thread-port',event:{type:'close',port:4501}},
+    {type:'native-thread-error',error:'Retired error'},
+    {type:'native-thread-exit',code:1},
+  ])raw.onmessage({data})
+  expect({events,extraPosts:raw.sent.length-sent,progress:vi.mocked(self.postMessage).mock.calls,
+    portOpens:state.portOpens,portStops:state.portStops,fileCloses:state.fileCloses,
+    portCloses:state.portCloses,watchCloses:state.watchCloses,terminated:raw.terminated}).toEqual({
+    events:[],extraPosts:0,progress:[],portOpens:0,portStops:0,fileCloses:1,
+    portCloses:1,watchCloses:1,terminated:1,
+  })
 })
 
 it('terminates an online worker asynchronously with the same result for concurrent callers',async()=>{

@@ -18,7 +18,7 @@ test('production matrix requires all five original examples in every engine',()=
     const example=nativeReleaseExamples.find(example=>example.fixture===cell.fixture)
     assert.deepEqual(cell.args,['--test','--test-force-exit','--test-timeout=180000','/examples/tests/native-owner-sdk.test.mjs'])
     assert.deepEqual(cell.options.env,{PATH:'/bin',NATIVE_SDK_BUNDLE_DIR:options.sdk,NATIVE_DEPLOYMENT_DIR:options.deployment,
-      NATIVE_OWNER_RUNTIME_CATALOG:'1',NATIVE_OWNER_PINNED_EXAMPLES:'1',NATIVE_TEST_BROWSER:cell.browser,
+      NATIVE_OWNER_RUNTIME_CATALOG:'1',NATIVE_OWNER_PINNED_EXAMPLES:'1',NATIVE_OWNER_TIMINGS:'1',NATIVE_TEST_BROWSER:cell.browser,
       NATIVE_OWNER_PRODUCTION:'1',NATIVE_OWNER_EXAMPLE:example.kind+'/'+example.path})
   }
 })

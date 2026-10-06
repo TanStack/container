@@ -2,6 +2,7 @@ import {Volume} from 'memfs'
 import type {NativeFileOperations} from './filesystem-operations'
 import {installLockedPackages,PackageInstallCache} from '../npm/install'
 import type {InstallProgress,RuntimeLock} from '../npm/types'
+import type {PackageDownloadPolicy} from '../npm/download-policy'
 import {VolumeFileSystem} from './volume-file-system'
 
 function copyTree(source:NativeFileOperations,from:string,target:NativeFileOperations,to:string){
@@ -21,6 +22,7 @@ function copyTree(source:NativeFileOperations,from:string,target:NativeFileOpera
 export async function installLiveLockedPackages(volume:NativeFileOperations,lock:RuntimeLock,options:{
   signal?:AbortSignal
   cache?:PackageInstallCache
+  packageDownloadPolicy?:PackageDownloadPolicy
   onProgress?:(progress:InstallProgress)=>void
   lockText?:string
   lockPath?:'/app/package-lock.json'|'/app/npm-shrinkwrap.json'
@@ -40,7 +42,7 @@ export async function installLiveLockedPackages(volume:NativeFileOperations,lock
   }
   const staged=new Volume()
   staged.mkdirSync('/app/node_modules',{recursive:true})
-  await installLockedPackages(new VolumeFileSystem(staged),lock,options.onProgress,options.signal,options.cache)
+  await installLockedPackages(new VolumeFileSystem(staged),lock,options.onProgress,options.signal,options.cache,undefined,options.packageDownloadPolicy)
   options.signal?.throwIfAborted()
   const id=crypto.randomUUID().replaceAll('-','')
   const stagePath='/app/.native-install-stage-'+id

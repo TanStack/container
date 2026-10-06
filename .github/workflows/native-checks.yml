@@ -31,6 +31,8 @@ jobs:
           npm ci --prefix tests/fixtures/native-oxide-build --ignore-scripts --no-audit --no-fund
           npm ci --prefix tests/fixtures/wasi-filesystem-codec-114 --ignore-scripts --no-audit --no-fund
           ./node_modules/.bin/playwright install --with-deps chromium firefox webkit
+      - name: Check locked package downloads and HTTP cleanup in desktop browsers
+        run: npx --no-install vitest run tests/native-package-download-browser.test.ts tests/native-package-http-cleanup-browser.test.ts --maxWorkers=1
       - run: npm run test:release
       - run: npm run test:native-site-harness
       - run: node scripts/setup-release-toolchains.mjs

@@ -5,8 +5,10 @@ import {installLockedPackages,inspectBundledPackages,PackageInstallCache} from '
 import type {RuntimeLock,PackageIdentity} from './types'
 import {minimatch} from 'minimatch'
 import {maxSatisfying,satisfies,validRange} from 'semver'
+import {normalizePackageDownloadPolicy,packageDownloadURL} from './download-policy'
+import type {PackageDownloadPolicy} from './download-policy'
 
-export interface ProjectInstallOptions {ignoreScripts?:boolean;cwd?:string}
+export interface ProjectInstallOptions {ignoreScripts?:boolean;cwd?:string;packageDownloadPolicy?:PackageDownloadPolicy}
 export interface ProjectInstallResult {installed:number;skippedPlatformPackages:string[];ignoredScripts:string[];packageAliases?:{installPath:string;name:string;version:string}[]}
 export type PackageLifecycleEvent='preinstall'|'install'|'postinstall'|'prepublish'|'preprepare'|'prepare'|'postprepare'
 export interface PackageLifecycleTask {cwd:string;event:PackageLifecycleEvent;script:string;env:Record<string,string>}
@@ -105,7 +107,8 @@ async function fetchRegistryMetadata(name:string,signal?:AbortSignal){
 }
 const maxLocklessDirectDependencies=128,maxLocklessPackages=512,maxLocklessMetadataPackages=256,maxRegistryMetadataBytes=16*1024*1024,maxRegistryMetadataTotalBytes=96*1024*1024
 /** Resolve a deterministic bounded npm v3 physical tree from registry metadata. */
-export async function resolveProjectLock(manifestText:string,signal?:AbortSignal,cache?:PackageInstallCache,onActivity?:()=>void){
+export async function resolveProjectLock(manifestText:string,signal?:AbortSignal,cache?:PackageInstallCache,onActivity?:()=>void,policy?:PackageDownloadPolicy){
+  const configuredPolicy=normalizePackageDownloadPolicy(policy)
   await cache?.ready(signal)
   onActivity?.()
   const manifest=record(JSON.parse(manifestText),'package.json')
@@ -191,7 +194,7 @@ export async function resolveProjectLock(manifestText:string,signal?:AbortSignal
         ...(selected.scripts===undefined?{}:{scripts:selected.scripts}),...(selected.hasInstallScript===undefined?{}:{hasInstallScript:selected.hasInstallScript})}
       const bundledPaths:string[]=[]
       if(declaredBundles.length){
-        const archives=await inspectBundledPackages(dist.tarball,dist.integrity,cache,signal,onActivity)
+        const archives=await inspectBundledPackages(dist.tarball,dist.integrity,cache,signal,onActivity,configuredPolicy)
         const declared=new Set(declaredBundles),found=new Set<string>()
         for(const bundled of archives){
           const top=topLevelBundleName(bundled.path)
@@ -301,6 +304,7 @@ function discoverWorkspaces(files:WorkspaceFiles,root:string,patterns:string[]){
 
 /** Read npm's physical package tree, without resolving new versions or running npm. */
 export function planProjectInstall(manifestText:string,lockText:string,options:ProjectInstallOptions={}){
+  const configuredPolicy=normalizePackageDownloadPolicy(options.packageDownloadPolicy)
   const manifest=record(JSON.parse(manifestText),'package.json'),lock=record(JSON.parse(lockText),'lockfile')
   if(lock.lockfileVersion===1)throw unsupported('npm lockfile version 1 is unsupported because it does not contain the physical packages tree')
   if(lock.lockfileVersion!==2&&lock.lockfileVersion!==3)throw Error('Expected npm lockfile version 2 or 3')
@@ -349,8 +353,7 @@ export function planProjectInstall(manifestText:string,lockText:string,options:P
     if(name!==installedName)(result.packageAliases??=[]).push({installPath,name,version:pkg.version})
     if(pkg.inBundle===true){bundled.push({installPath,name,version:pkg.version});continue}
     if(typeof pkg.resolved!=='string'||typeof pkg.integrity!=='string')throw Error('Package requires a version, registry URL and integrity: '+path)
-    const url=new URL(pkg.resolved)
-    if(url.protocol!=='https:'||url.hostname!=='registry.npmjs.org'||url.port||url.username||url.password||url.hash)throw Error('Package downloads are restricted to https://registry.npmjs.org')
+    const url=packageDownloadURL(pkg.resolved,configuredPolicy)
     if(!/^sha512-[A-Za-z0-9+/]{86}==$/.test(pkg.integrity))throw Error('Package requires SHA-512 integrity: '+path)
     runtimeLock.packages.push({installPath,name,version:pkg.version,resolved:url.href,integrity:pkg.integrity})
   }
@@ -362,6 +365,7 @@ export function planProjectInstall(manifestText:string,lockText:string,options:P
     ;(owner.bundledPackages??=[]).push(pkg)
   }
   const installed=new Set([...runtimeLock.packages,...bundled,...locals,...links].map(pkg=>pkg.installPath))
+  const archiveURLs=new Map(runtimeLock.packages.map(pkg=>[pkg.installPath,pkg.resolved]))
   const identities=new Map([...runtimeLock.packages,...bundled,...locals].map(pkg=>[pkg.installPath,pkg]))
   for(const link of links){
     const local=locals.find(pkg=>pkg.installPath===link.target)!
@@ -391,6 +395,10 @@ export function planProjectInstall(manifestText:string,lockText:string,options:P
       const resolved=resolve(path,name)
       if(!resolved)throw Error('Lockfile is missing dependency '+name+' required by '+(path||'/'))
       const spec=required[name],range=validRange(spec)
+      if(spec.startsWith('https:')){
+        const expected=packageDownloadURL(spec,configuredPolicy).href
+        if(archiveURLs.get(resolved.installPath)!==expected)throw Error('Locked package URL does not match dependency '+name+' required by '+(path||'/'))
+      }
       if(range&&resolved.version&&!satisfies(resolved.version,range))throw Error('Lockfile dependency '+name+'@'+resolved.version+' does not satisfy '+spec+' required by '+(path||'/'))
     }
     const peers=dependencies(pkg.peerDependencies),metadata=pkg.peerDependenciesMeta===undefined?{}:record(pkg.peerDependenciesMeta,'peerDependenciesMeta')
@@ -426,6 +434,7 @@ function sameInstallTree(before:ReturnType<WorkspaceFiles['snapshot']>,after:Ret
 }
 export async function installProject(files:WorkspaceFiles,options:ProjectInstallOptions={},signal?:AbortSignal,runLifecycle?:(task:PackageLifecycleTask)=>Promise<void>,onActivity?:()=>void):Promise<ProjectInstallResult>{
   signal?.throwIfAborted()
+  const packageDownloadPolicy=normalizePackageDownloadPolicy(options.packageDownloadPolicy)
   const revision=files.revision
   const root=processDirectory(files,options.cwd??'/').replace(/\/$/,'')
   const staged=new WorkspaceFiles({},files.maxBytes,files.maxFiles)
@@ -438,8 +447,8 @@ export async function installProject(files:WorkspaceFiles,options:ProjectInstall
   const lockPath=staged.existsSync(root+'/npm-shrinkwrap.json')?root+'/npm-shrinkwrap.json':staged.existsSync(root+'/package-lock.json')?root+'/package-lock.json':''
   let cache=installCaches.get(files)
   if(!cache){cache=new PackageInstallCache();installCaches.set(files,cache)}
-  const lockText=lockPath?text(lockPath):await resolveProjectLock(manifestText,signal,cache,onActivity)
-  const plan=traceInstallPhase('install-planning',()=>planProjectInstall(manifestText,lockText,options))
+  const lockText=lockPath?text(lockPath):await resolveProjectLock(manifestText,signal,cache,onActivity,packageDownloadPolicy)
+  const plan=traceInstallPhase('install-planning',()=>planProjectInstall(manifestText,lockText,{...options,packageDownloadPolicy}))
   onActivity?.()
   const workspacePaths:string[]=[]
   if(plan.workspaces.length){
@@ -504,7 +513,7 @@ export async function installProject(files:WorkspaceFiles,options:ProjectInstall
     }
     for(const local of plan.locals)visitLocal(local)
     staged.rmSync(root+'/node_modules',{recursive:true,force:true})
-    await installLockedPackages(staged,plan.lock,undefined,signal,cache,onActivity)
+    await installLockedPackages(staged,plan.lock,undefined,signal,cache,onActivity,packageDownloadPolicy)
     for(const link of plan.links){
       const path=root+link.installPath
       staged.mkdirSync(path.slice(0,path.lastIndexOf('/')),true)

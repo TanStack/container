@@ -18,12 +18,14 @@ test('owner progress history stays on one client clock across restore and replac
     client.subscribeEvents(event=>events.push(event))
     const restore={type:'progress',phase:'restore-checkpoint-loading',elapsedMs:0}
     const replacement={type:'progress',phase:'worker:1:binding-ready'}
-    const response={type:'progress',phase:'host-start-response-received',elapsedMs:3}
+    const response={type:'progress',phase:'host-start-response-received',elapsedMs:3,durationMs:42}
     for(const [time,event]of [[125,restore],[175,replacement],[200,response]] as const){
       now=time;channel.port1.onmessage({data:{protocol:'native-owner-v1',type:'event',event}})
     }
     expect(events.map(event=>event.elapsedMs)).toEqual([25,75,100])
     expect(client.events).toEqual(events)
+    expect(events[2].durationMs).toBe(42)
+    expect(response.durationMs).toBe(42)
     expect(restore.elapsedMs).toBe(0);expect(replacement).not.toHaveProperty('elapsedMs');expect(response.elapsedMs).toBe(3)
     const diagnostic={type:'diagnostic',error:'original failure',stack:'original stack'}
     channel.port1.onmessage({data:{protocol:'native-owner-v1',type:'event',event:diagnostic}})

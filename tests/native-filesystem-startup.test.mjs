@@ -1,9 +1,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import {readFileSync} from 'node:fs'
 import {installNativeFilesystemProvider,getNativeFilesystemProvider} from '../src/native/filesystem-provider.mjs'
 import {installNativeFilesystemConnection,getNativeFilesystemConnection,linkNativeFilesystemWorker,
   receiveNativeFilesystemBootstrap,FILESYSTEM_BOOTSTRAP,FILESYSTEM_ATTACH,FILESYSTEM_DETACH} from '../src/native/filesystem-worker-link.mjs'
 import {createFilesystemServiceControl} from '../src/native/filesystem-service-control.mjs'
+
+test('all worker filesystem bootstraps register compiler access after installing the remote provider',()=>{
+  const source=readFileSync(new URL('../src/native/filesystem-bootstrap.ts',import.meta.url),'utf8')
+  const provider=source.indexOf('installNativeFilesystemProvider(createNativeFilesystemClientApi(')
+  const registration=source.indexOf("await import('./compiler-filesystem')")
+  assert.ok(provider>=0&&registration>provider,'Compiler filesystem registration cannot depend on loading Rolldown')
+  assert.doesNotMatch(source,/@rolldown\/browser|rolldown-loading/,'Filesystem startup must stay compiler-free')
+})
 
 test('a filesystem provider cannot be replaced after handles have opened',()=>{
   const scope={},provider={fs:{},vol:{}}

@@ -68,3 +68,24 @@ test('the installed workload prints development timings outside the production b
   assert.doesNotMatch(source,/if\(process\.env\.NATIVE_OWNER_TIMINGS==='1'\)console\.log/)
   assert.match(source,/result:real\}\)\n            console\.log/)
 })
+
+test('framework identity and timing output stay on the Node side of the browser evaluation',()=>{
+  const source=readFileSync('tests/native-owner-sdk.test.mjs','utf8')
+  assert.match(source,/example:example\.kind\+'\/'\+example\.path,result:real/)
+  const start=source.indexOf('const real=await realPage.evaluate(')
+  const end=source.indexOf('}).catch(error=>',start)
+  assert.ok(start>=0&&end>start)
+  const evaluation=source.slice(start,end)
+  assert.doesNotMatch(evaluation,/NATIVE_OWNER_TIMINGS|writeNativeOwnerTimings/)
+})
+
+test('producer durations survive coalesced receiving timestamps and reject invalid values',()=>{
+  const value=input()
+  value.result.startupStages=[{phase:'owner-runtime-preparation-started',elapsedMs:12},
+    {phase:'owner-runtime-preparation-completed',elapsedMs:12,durationMs:9}]
+  assert.deepEqual(nativeOwnerTimingRecord(value).startupStages,value.result.startupStages)
+  for(const bad of [-1,null,NaN,Infinity,'9']){
+    value.result.startupStages[1].durationMs=bad
+    assert.throws(()=>nativeOwnerTimingRecord(value),/Invalid timing duration/)
+  }
+})

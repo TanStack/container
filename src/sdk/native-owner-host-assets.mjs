@@ -17,7 +17,18 @@ function sameOriginPath(value,name){
 }
 
 /** Static owner files for a dedicated, credential-free browser sandbox origin. */
-export function createNativeOwnerHostAssets({parentOrigin,previewOrigin,previewHostSuffix,buildId,runtimeCandidates,sdkPath='/sdk/index.js',workerPath='/runtime/native/engine.js',assetBaseURL='/runtime/'}){
+export function createNativeOwnerHostAssets({parentOrigin,previewOrigin,previewHostSuffix,buildId,runtimeCandidates,packageDownloadPolicy,sdkPath='/sdk/index.js',workerPath='/runtime/native/engine.js',assetBaseURL='/runtime/'}){
+  if(packageDownloadPolicy!==undefined){
+    if(!packageDownloadPolicy||typeof packageDownloadPolicy!=='object'||Array.isArray(packageDownloadPolicy)||Object.keys(packageDownloadPolicy).some(key=>key!=='additionalOrigins'))
+      throw TypeError('Package download policy requires an additionalOrigins array')
+    const origins=packageDownloadPolicy.additionalOrigins===undefined?[]:packageDownloadPolicy.additionalOrigins
+    if(!Array.isArray(origins)||origins.length>32)throw TypeError('Package download policy requires at most 32 exact HTTPS origins')
+    for(const origin of origins){
+      exactOrigin(origin,'Package download origin')
+      if(!origin.startsWith('https:'))throw TypeError('Package download origin must be an exact HTTPS origin')
+    }
+    packageDownloadPolicy={additionalOrigins:[...new Set(origins)].sort()}
+  }
   if(buildId!==undefined&&(typeof buildId!=='string'||!buildId.length||buildId.length>256||!/^[\x21-\x7e]+$/.test(buildId)))
     throw TypeError('buildId must be a nonempty printable ASCII string of at most 256 characters')
   parentOrigin=exactOrigin(parentOrigin,'parentOrigin')
@@ -44,7 +55,7 @@ export function createNativeOwnerHostAssets({parentOrigin,previewOrigin,previewH
     `const parentOrigin = ${JSON.stringify(parentOrigin)};\n`+
     `const previewOrigin = ${JSON.stringify(previewOrigin)};\n`+
     `if (location.origin === parentOrigin || location.origin === previewOrigin) throw Error('Owner origin must be separate');\n`+
-    `installNativeOwnerHost({ allowedParentOrigin: parentOrigin, previewOrigin, previewHostSuffix: ${JSON.stringify(previewHostSuffix)}, buildId: ${JSON.stringify(buildId)}, workerURL: ${JSON.stringify(workerPath)}, assetBaseURL: ${JSON.stringify(assetBaseURL)}, runtimeCandidates: ${JSON.stringify(runtimeCandidates)} });\n`+
+    `installNativeOwnerHost({ allowedParentOrigin: parentOrigin, previewOrigin, previewHostSuffix: ${JSON.stringify(previewHostSuffix)}, buildId: ${JSON.stringify(buildId)}, workerURL: ${JSON.stringify(workerPath)}, assetBaseURL: ${JSON.stringify(assetBaseURL)}, runtimeCandidates: ${JSON.stringify(runtimeCandidates)}, packageDownloadPolicy: ${JSON.stringify(packageDownloadPolicy)} });\n`+
     `parent.postMessage('native-owner-ready', parentOrigin);\n`
   return {
     files:{'/owner.html':html,'/__sandbox/owner.js':script},

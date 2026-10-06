@@ -5,6 +5,8 @@ import type {CheckpointMetadata} from '../sandbox/checkpoint-storage'
 import type {WorkspaceSnapshot} from '../sandbox/files'
 import type {NetworkEvent} from '../sandbox/virtual-network'
 import type {RuntimeLock} from '../npm/types'
+import {normalizePackageDownloadPolicy} from '../npm/download-policy'
+import type {PackageDownloadPolicy} from '../npm/download-policy'
 import type {TypeScriptDiagnostic} from './typescript-diagnostic'
 import {parseNativeInstallCommand,parseNativeStartCommand,planNativeBuildScript} from './project-script'
 import type {NativeTerminalResult,NativeTerminalOutput} from './terminal-types'
@@ -18,7 +20,8 @@ type Pending={operation:string;resolve:(value:any)=>void;reject:(error:Error)=>v
 export type NativeDevServerEvent=
   // Receiver-clock time since this dev server, or owner client, was created.
   // Worker-local clocks are not comparable across bootstrap and child workers.
-  |{type:'progress';phase:string;elapsedMs:number}
+  // durationMs, when present, is a completed span measured by its producer.
+  |{type:'progress';phase:string;elapsedMs:number;durationMs?:number}
   |{type:'diagnostic';error:string;stack?:string}
   |{type:'output';stream:'stdout'|'stderr';text:string}
 const nativeCheckpointKey=(key:string)=>{
@@ -44,6 +47,8 @@ export interface NativeDevServerOptions{
   lock?:RuntimeLock
   /** Use already mounted dependencies, for example when restoring a complete snapshot. */
   installDependencies?:boolean
+  /** Host-approved extra HTTPS origins for locked package downloads. Registry-only by default. */
+  packageDownloadPolicy?:PackageDownloadPolicy
   /** Direct workspace entry, exclusive with script. */
   entry?:string
   /** Serve a fetch export from entry over the virtual HTTP port. */
@@ -79,6 +84,7 @@ export class NativeDevServer {
   #startReconcileTimer?:ReturnType<typeof setTimeout>
   #startReconciling=false
   constructor(files:Record<string,string|Uint8Array>,options:NativeDevServerOptions,restoreSnapshot?:WorkspaceSnapshot){
+    const packageDownloadPolicy=normalizePackageDownloadPolicy(options.packageDownloadPolicy)
     if(options.entry&&(options.script||options.startCommand))throw Error('Choose either a project script or an entry file')
     if(options.script&&options.startCommand)throw Error('Choose either script or startCommand')
     const root=options.workspaceRoot??'/app'
@@ -131,9 +137,7 @@ export class NativeDevServer {
         return
       }
       if(data.type==='native-dev-progress'){
-        const elapsedMs=Math.round(performance.now()-this.#startedAt)
-        this.progress.push({phase:data.phase,elapsedMs})
-        this.#emit({type:'progress',phase:data.phase,elapsedMs})
+        this.#recordProgress(data.phase)
         if(data.phase==='start-response-posted')this.#scheduleStartReconcile(250)
         return
       }
@@ -153,7 +157,7 @@ export class NativeDevServer {
         startSnapshot=undefined
         if(!mounted){this.close(Error('Native dev worker requested startup twice'));return}
         const transfer=snapshot?[...new Set(Object.values(snapshot.files).map(bytes=>bytes.buffer).filter((buffer):buffer is ArrayBuffer=>buffer instanceof ArrayBuffer))]:[]
-        this.#call<{port:number;webSocketToken:string}>('start',{files:mounted,restoreSnapshot:snapshot,lock:options.lock,installDependencies:options.installDependencies!==false,installRequested:!!options.installCommand,entry,script,env:options.env,serveFetchEntry:options.serveFetchEntry,staticRoot,assetBaseURL},180000,true,transfer)
+        this.#call<{port:number;webSocketToken:string}>('start',{files:mounted,restoreSnapshot:snapshot,lock:options.lock,installDependencies:options.installDependencies!==false,installRequested:!!options.installCommand,packageDownloadPolicy,entry,script,env:options.env,serveFetchEntry:options.serveFetchEntry,staticRoot,assetBaseURL},180000,true,transfer)
           .then(({port,webSocketToken})=>{
             clearTimeout(this.#startReconcileTimer)
             this.#port=port
@@ -211,6 +215,11 @@ export class NativeDevServer {
     this.events.push(event.type==='output'&&event.text.length>8192?{...event,text:event.text.slice(-8192)}:event)
     if(this.events.length>256)this.events.shift()
     for(const listener of this.#eventListeners)try{listener(event)}catch{/* Observers cannot affect the project. */}
+  }
+  #recordProgress(phase:string,durationMs?:number){
+    const elapsedMs=Math.round(performance.now()-this.#startedAt)
+    this.progress.push({phase,elapsedMs})
+    this.#emit({type:'progress',phase,elapsedMs,...(durationMs===undefined?{}:{durationMs})})
   }
   /** Subscribe to live process output, startup progress, and diagnostics. */
   subscribeEvents(listener:(event:NativeDevServerEvent)=>void){
@@ -315,6 +324,8 @@ export class NativeDevServer {
     if(!path.startsWith('/')||path.startsWith('//'))throw Error('HTTP readiness path must start with one slash')
     if(!Number.isFinite(timeoutMs)||timeoutMs<=0)throw Error('HTTP readiness timeout must be positive')
     const deadline=performance.now()+timeoutMs
+    const readinessStarted=deadline-timeoutMs
+    this.#recordProgress('http-readiness-started')
     let lastError:unknown
     while(performance.now()<deadline){
       if(this.#closed)throw Error('Native dev server closed')
@@ -330,13 +341,19 @@ export class NativeDevServer {
             continue
           }
           try{
+            this.#recordProgress('http-readiness-probe-started')
             const response=await this.previewServer(port).fetch(new Request(`http://127.0.0.1:${port}${path}`,{
               headers:{Accept:'text/html'},signal:AbortSignal.timeout(Math.max(1,Math.min(5000,deadline-performance.now()))),
             }))
+            this.#recordProgress('http-readiness-headers-received')
             await response.body?.cancel()
-            if(response.status<500)return port
+            if(response.status<500){
+              this.#recordProgress('http-readiness-completed',Math.round(performance.now()-readinessStarted))
+              return port
+            }
             lastError=Error(`HTTP status ${response.status} on port ${port}`)
-          }catch(error){lastError=error}
+            this.#recordProgress('http-readiness-probe-failed')
+          }catch(error){lastError=error;this.#recordProgress('http-readiness-probe-failed')}
         }
       }catch(error){lastError=error}
       await new Promise(resolve=>setTimeout(resolve,Math.min(250,Math.max(0,deadline-performance.now()))))

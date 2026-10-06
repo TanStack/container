@@ -14,6 +14,7 @@ import {sdkBrowserAssets} from '../scripts/sdk-browser-assets.mjs'
 import {installNativeStreamObservation} from '../scripts/native-stream-observation.mjs'
 import {observeNativeOwnerStartup} from '../scripts/native-owner-startup-observation.mjs'
 import {writeNativeOwnerTimings} from '../scripts/native-owner-timings.mjs'
+import {waitForPinnedStartClient} from '../scripts/native-start-example-readiness.mjs'
 import {installFetchConsumptionObservation} from '../scripts/native-fetch-consumption-observation.mjs'
 import {installNativeWorkerIOObservation} from '../scripts/native-worker-io-observation.mjs'
 import {installNativePreviewInteractionObservation} from '../scripts/native-preview-interaction-observation.mjs'
@@ -791,6 +792,11 @@ test('packaged native SDK runs a project in a separate-origin owner frame',{
         assert.ok(selectedExamples.length,'No examples matched NATIVE_OWNER_EXAMPLE')
         for(const example of selectedExamples){
           const realPage=await browser.newPage()
+          if(example.kind==='react')await realPage.exposeFunction('waitForPinnedExampleClient',async()=>{
+            const frame=realPage.frames().find(frame=>frame.url()===previewOrigin+'/')
+            assert.ok(frame,'Pinned example preview frame missing')
+            await waitForPinnedStartClient(frame,30000)
+          })
           const startupObservation=process.env.NATIVE_OWNER_STARTUP_OBSERVE==='1'
             ?observeNativeOwnerStartup(realPage,{previewOrigin}):undefined
           let beforeDisposal
@@ -912,7 +918,7 @@ test('packaged native SDK runs a project in a separate-origin owner frame',{
             timings.startMs=Math.round(performance.now()-startedAt)
             const startupStages=client.events.filter(event=>event.type==='progress'&&
               !event.phase.startsWith('dependency-installed:')&&!event.phase.startsWith('async-transform-'))
-              .map(({phase,elapsedMs})=>({phase,elapsedMs}))
+              .map(({phase,elapsedMs,durationMs})=>({phase,elapsedMs,...(durationMs===undefined?{}:{durationMs})}))
             if(example.warmCache){
               await client.dispose()
               await window.blockPackageDownloads()
@@ -974,6 +980,10 @@ test('packaged native SDK runs a project in a separate-origin owner frame',{
               await new Promise(resolve=>setTimeout(resolve,100))
             }
             if(stableRequests<5)throw Error(`${example.name} client module graph did not settle`)
+            // A quiet request list and complete document can precede dynamic
+            // route imports and hydration. Use the pinned apps' existing client
+            // UI as a test precondition, never a runtime hook or a retry click.
+            if(example.kind==='react')await globalThis.waitForPinnedExampleClient()
             let clickedBeforeEdit=''
             if(example.clicked){
               await preview.click('button')
@@ -1400,7 +1410,7 @@ test('packaged native SDK runs a project in a separate-origin owner frame',{
               }else assert.equal(real.production.clicked,true,`${browserType.name()} production hydration: ${JSON.stringify({real,errors:realFailures})}`)
             }
             writeNativeOwnerTimings({enabled:process.env.NATIVE_OWNER_TIMINGS==='1',
-              browser:browserType.name(),example:example.path,result:real})
+              browser:browserType.name(),example:example.kind+'/'+example.path,result:real})
             console.log(JSON.stringify({browser:browserType.name(),example:example.name,
               development:'passed',restart:example.restart?'passed':'not requested',
               productionBuild:example.production?(real.production.viteOnlyProbe?'Vite API':'declared-script API'):'not requested',

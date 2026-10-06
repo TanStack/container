@@ -30,7 +30,7 @@ export function terminalMatrixRunner(runnerMetadata,projectRoot=root){
   for(const metadata of Object.values(runnerMetadata.packages))
     assert.equal(metadata.version,'1.63.0','Use the pinned private browser runner')
   const runner=runnerMetadata.directory
-  const paths=[driver,'scripts/native-terminal-viewport.mjs']
+  const paths=[driver,'scripts/native-terminal-viewport.mjs','scripts/native-edited-preview.mjs']
   const terminalHashes=Object.fromEntries(paths.map(path=>{
     const copied=join(runner,path),stat=lstatSync(copied)
     assert.ok(stat.isFile()&&!stat.isSymbolicLink(),'Terminal runner must be a regular file')

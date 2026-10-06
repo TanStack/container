@@ -121,6 +121,9 @@ export class OutgoingMessage extends Writable {
     }catch(cause){callback(cause)}
   }
   _final(callback){
+    // A queued final step can outlive socket cancellation. Node does not send
+    // another HTTP chunk to a destroyed socket or finish an already closed response.
+    if(this.destroyed||this.socket?.destroyed)return
     if(!this.socket){this._pendingFinal=callback;return}
     try{this._sendHeaders();if(this.strictContentLength&&!this._noBody&&this.hasHeader('content-length')&&Number(this.getHeader('content-length'))!==this._bytes)throw error('ERR_HTTP_CONTENT_LENGTH_MISMATCH')
       if(this._chunked&&!this._noBody)this.socket.write('0\r\n'+this._trailers+'\r\n',callback);else this.socket.write(Buffer.alloc(0),callback)
@@ -170,7 +173,10 @@ export class Server extends NetServer {
       onMessage:message=>{
         clearTimeout(headerTimer);req=message;res=new ServerResponse(req);socket._httpBusy=true;requestDone=responseDone=false
         socket.setTimeout(this.timeout)
-        const response=res;res.on('error',()=>socket.destroy());res.once('finish',()=>{responseDone=true;req.resume();advance();response.emit('close')})
+        const response=res;res.on('error',()=>socket.destroy());res.once('finish',()=>{
+          responseDone=true;req.resume();advance();response.socket=null
+          process.nextTick(()=>{if(!response.destroyed){response.destroyed=true;response.emit('close')}})
+        })
         if(req.headers.expect?.toLowerCase()==='100-continue'){if(this.listenerCount('checkContinue'))this.emit('checkContinue',req,res);else {res.writeContinue();this.emit('request',req,res)}}
         else if(req.headers.expect){if(this.listenerCount('checkExpectation'))this.emit('checkExpectation',req,res);else {res.writeHead(417);res.end()}}
         else this.emit('request',req,res)

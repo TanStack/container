@@ -67,6 +67,16 @@ class NativeSuperblock extends Superblock{
 class NativeVolume extends Volume{
   constructor(options){
     super(new NativeSuperblock(options))
+    const statSync=this.statSync
+    this.statSync=(target,options)=>{
+      try{return Reflect.apply(statSync,this,[target,options])}
+      catch(error){
+        // Node's optional stat treats a non-directory parent as a missing
+        // target. Optional lstat deliberately retains its ENOTDIR error.
+        if(error?.code==='ENOTDIR'&&options?.throwIfNoEntry===false)return undefined
+        throw error
+      }
+    }
     const globSync=this.globSync
     this.globSync=(pattern,options={})=>{
       const patterns=Array.isArray(pattern)?pattern:[pattern]

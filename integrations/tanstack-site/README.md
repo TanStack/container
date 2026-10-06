@@ -16,6 +16,11 @@ credentials, dependencies, agent configuration, and Wrangler state. It records
 the source revision and file hash, installed SDK inventory hash, and pinned
 example source and lock hashes in `.native-local/identity.json`.
 
+Each native fixture owns its Vite optimizer cache under
+`.native-local/vite-cache`. Different hosts must not share optimizer output,
+even when they share installed dependencies. Their SDK aliases and config
+hashes can differ.
+
 Install the site's original locked dependencies in that directory:
 
 ```sh

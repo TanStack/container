@@ -44,7 +44,10 @@ GOTOOLCHAIN=local \
 .toolchains/go-sdk/go/bin/go -C shell/mvdan mod download
 ```
 
-The build uses that cache offline and rejects a different Go version.
+The build uses that cache offline and rejects a different Go version. You can
+set `GOMODCACHE` to another populated module cache. The build asks Go for the
+locked module's directory, verifies the cached modules and copies that module's
+license, rather than assuming it lives under `GOPATH`.
 It disables Go's automatic Git stamp so the shell does not depend on the
 checkout revision, dirty state or whether the source came from an archive.
 Oxide requires Rust 1.95.0 and the `wasm32-wasip1-threads` target. The release
@@ -180,6 +183,21 @@ deadlines. It also tests owner files, checkpoints, terminal commands, agent
 tools, cancellation, stdin and output limits. Debug filters cannot reduce a
 release batch. Package and deployment identities are checked before the batch
 and after each browser.
+
+The private `scripts/check-native-sdk.mjs` build also runs ten project and
+terminal cycles on one owner connection per browser and compiler version.
+This covers HTTP, fresh project files, persistent shell state, Node commands,
+stdin/EOF, interruption, replacement and disposal counts without a page reset.
+It retains all sixty cycle records and checks the exact installed package and
+browser-runner identities. It is not a browser-memory measurement or full-site
+soak. To run it separately against a prepared pair:
+
+```sh
+NATIVE_OWNER_SOAK=1 \
+NATIVE_SDK_BUNDLE_DIR=/absolute/path/to/consumer/node_modules/@tanstack/browser-sandbox-experimental \
+NATIVE_DEPLOYMENT_DIR=/absolute/path/to/consumer/hosted \
+node --test --test-concurrency=1 tests/native-owner-soak-sdk.test.mjs
+```
 
 Original example snapshots and npm locks live in
 `tests/fixtures/native-owner-sources`. No neighboring Router checkout is

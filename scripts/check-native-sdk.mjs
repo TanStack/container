@@ -6,6 +6,11 @@ import {join,resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {createSourceSnapshot,verifySourceSnapshot} from './source-snapshot.mjs'
 import {nativeRuntimeBuildPlan} from './native-runtime-build-plan.mjs'
+import {readNativeOwnerSoakResults} from './native-owner-soak-accounting.mjs'
+import {nativeReleaseExamples} from './native-example-sources.mjs'
+import {nativeOwnerTimingRecord} from './native-owner-timings.mjs'
+import {readNativeCommandBootstrapResults} from './native-command-bootstrap-results.mjs'
+export {readNativeCommandBootstrapResults} from './native-command-bootstrap-results.mjs'
 
 const sourceRoot=fileURLToPath(new URL('..',import.meta.url))
 export function nativeSDKCheckEnvironment(env=process.env){
@@ -50,6 +55,44 @@ export function readNativeSDKCheckAcceptance(output){
     assert.deepEqual(identity,first,'Native CI inputs changed between engines')
   }
   return rows
+}
+
+export function readNativeSDKCheckTimings(output,{complete=true}={}){
+  const rows=String(output).split('\n').filter(line=>line.startsWith('{'))
+    .map(line=>JSON.parse(line)).filter(row=>row&&Object.hasOwn(row,'timings'))
+  const expected=['chromium','firefox','webkit'].flatMap(browser=>
+    nativeReleaseExamples.map(({kind,path})=>({browser,example:kind+'/'+path})))
+  assert.ok(rows.length<=expected.length,'Too many SDK timing records')
+  if(complete)assert.equal(rows.length,expected.length,'SDK timings must cover all 15 original example checks')
+  assert.deepEqual(rows.map(({browser,example})=>({browser,example})),expected.slice(0,rows.length),
+    'SDK timings must retain the original browser and example order')
+  for(const row of rows){
+    assert.deepEqual(row,nativeOwnerTimingRecord({browser:row.browser,example:row.example,result:row}),
+      'Unexpected SDK timing fields')
+    assert.ok(row.startupStages.length,'SDK timing record is missing startup phases')
+    let previous=0
+    for(const {elapsedMs}of row.startupStages){
+      if(elapsedMs===undefined)continue
+      assert.ok(elapsedMs>=previous,'SDK startup phase clock went backwards')
+      previous=elapsedMs
+    }
+  }
+  return rows
+}
+
+export function captureNativeSDKCheckTimings(run,report){
+  let output
+  try{output=run()}
+  catch(error){
+    report.timingsComplete=false
+    // Reporting must never replace the original browser command failure.
+    try{report.timings=readNativeSDKCheckTimings(error.stdout??'',{complete:false})}
+    catch(captureError){report.timingCaptureError=String(captureError)}
+    throw error
+  }
+  report.timings=readNativeSDKCheckTimings(output)
+  report.timingsComplete=true
+  return output
 }
 
 export function readNativeSDKCheckDirectories(output,toolchains){
@@ -107,7 +150,7 @@ export function checkNativeSDK({root=sourceRoot,env=process.env,run=execFileSync
   const sourceArchive=join(workspace,'source.tar.gz')
   const source=createSourceSnapshot(root,sourceArchive)
   const environment={...nativeSDKCheckEnvironment(env),SDK_SOURCE_ARCHIVE:sourceArchive}
-  const report={format:1,scope:'Private native source build, package adoption, five-example desktop SDK checks, installed Node directory/context and command lifecycle checks, not site integration, publication or production acceptance.',
+  const report={format:1,scope:'Private native source build, package adoption, five-example desktop SDK checks, installed Node directory/context, command lifecycle and same-owner soak checks, not site integration, publication or production acceptance.',
     node:process.version,source,passed:false,phase:'runtime build'}
   mkdirSync(join(root,'test-results'),{recursive:true})
   const execute=(script,args=[],capture=false,extraEnvironment={})=>{
@@ -134,7 +177,8 @@ export function checkNativeSDK({root=sourceRoot,env=process.env,run=execFileSync
       assert.equal(adoption[field],true,'Incomplete native adoption: '+field)
     const sdk=join(adoption.consumer,'node_modules/@tanstack/browser-sandbox-experimental')
     report.phase='desktop SDK acceptance'
-    report.acceptance=readNativeSDKCheckAcceptance(execute('scripts/native-release-acceptance.mjs',[sdk,adoption.output.directory],true))
+    report.acceptance=readNativeSDKCheckAcceptance(captureNativeSDKCheckTimings(
+      ()=>execute('scripts/native-release-acceptance.mjs',[sdk,adoption.output.directory],true),report))
     report.phase='installed Node directory acceptance'
     report.directories=readNativeSDKCheckDirectories(execute('tests/native-owner-directory-sdk.test.mjs',[],true,{
       NATIVE_OWNER_DIRECTORY_CONTROL:'1',NATIVE_DIRECTORY_PLAYWRIGHT_ROOT:root,
@@ -149,6 +193,19 @@ export function checkNativeSDK({root=sourceRoot,env=process.env,run=execFileSync
     }),nativeRuntimeBuildPlan(root).map(({vite,rolldown})=>({vite,rolldown})))
     assert.deepEqual(report.commandLifecycles.inputs.identity,acceptanceIdentity,'Command CI package identity differs from example acceptance')
     assert.equal(report.commandLifecycles.inputs.runnerLockSHA256,report.directories.inputs.runnerLockSHA256,'Command and directory CI use different browser runners')
+    report.phase='installed Node command bootstrap acceptance'
+    report.commandBootstrap=readNativeCommandBootstrapResults(execute('tests/native-command-bootstrap-sdk.test.mjs',[],true,{
+      NATIVE_COMMAND_BOOTSTRAP_CONTROL:'1',NATIVE_SDK_BUNDLE_DIR:sdk,NATIVE_DEPLOYMENT_DIR:adoption.output.directory,
+    }),nativeRuntimeBuildPlan(root).map(({vite,rolldown})=>({vite,rolldown})))
+    assert.deepEqual(report.commandBootstrap.inputs.identity,acceptanceIdentity,'Bootstrap CI package identity differs from example acceptance')
+    assert.equal(report.commandBootstrap.inputs.runnerLockSHA256,report.directories.inputs.runnerLockSHA256,'Bootstrap CI uses a different browser runner')
+    report.phase='same-owner lifecycle acceptance'
+    report.ownerSoak=readNativeOwnerSoakResults(execute('tests/native-owner-soak-sdk.test.mjs',[],true,{
+      NATIVE_OWNER_SOAK:'1',NATIVE_COMMAND_PLAYWRIGHT_ROOT:root,
+      NATIVE_SDK_BUNDLE_DIR:sdk,NATIVE_DEPLOYMENT_DIR:adoption.output.directory,
+    }),nativeRuntimeBuildPlan(root).map(({vite,rolldown})=>({vite,rolldown})))
+    assert.deepEqual(report.ownerSoak.inputs.identity,acceptanceIdentity,'Owner soak package identity differs from example acceptance')
+    assert.equal(report.ownerSoak.inputs.runnerLockSHA256,report.directories.inputs.runnerLockSHA256,'Owner soak uses a different browser runner')
     verifySourceSnapshot(root,sourceArchive)
     report.adoption={packages:adoption.packages.map(({name,sha256,reproducible})=>({name,sha256,reproducible})),
       typeResolution:adoption.typeResolution,reinstall:adoption.reinstall,reinstalledDeploymentMatches:adoption.reinstalledDeploymentMatches}
@@ -163,7 +220,18 @@ export function checkNativeSDK({root=sourceRoot,env=process.env,run=execFileSync
   }
 }
 
+export function runNativeSDKCheckCLI(check=checkNativeSDK){
+  try{return check()}
+  catch(error){
+    // Uncaught exceptions can exit before replayed pipe output has drained.
+    // Keep the failed status, let Node finish both streams, and do not print
+    // the captured output a second time inside the child-process error object.
+    process.exitCode=1
+    console.error(error instanceof Error?error.stack:String(error))
+  }
+}
+
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   assert.equal(process.argv.length,2,'Usage: node scripts/check-native-sdk.mjs')
-  checkNativeSDK()
+  runNativeSDKCheckCLI()
 }

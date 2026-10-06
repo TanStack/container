@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import {test} from 'node:test'
 import {createNativeOwnerHostAssets} from '../src/sdk/native-owner-host-assets.mjs'
+test('owner assets carry only validated exact HTTPS package download origins',()=>{
+  const base={parentOrigin:'https://tanstack.com',previewOrigin:'https://sandbox-preview.example'}
+  const assets=createNativeOwnerHostAssets({...base,packageDownloadPolicy:{additionalOrigins:['https://packages.example','https://packages.example']}})
+  assert.match(assets.files['/__sandbox/owner.js'],/packageDownloadPolicy: \{"additionalOrigins":\["https:\/\/packages\.example"\]\}/)
+  assert.match(createNativeOwnerHostAssets(base).files['/__sandbox/owner.js'],/packageDownloadPolicy: undefined/)
+  for(const origin of ['http://packages.example','http://localhost','https://packages.example/','https://packages.example/path','https://packages.example?version=1'])
+    assert.throws(()=>createNativeOwnerHostAssets({...base,packageDownloadPolicy:{additionalOrigins:[origin]}}))
+  for(const packageDownloadPolicy of [null,[],{allowAny:true},{additionalOrigins:null},{additionalOrigins:Array(33).fill('https://packages.example')}])
+    assert.throws(()=>createNativeOwnerHostAssets({...base,packageDownloadPolicy}))
+})
 test('owner configuration carries a validated optional build identity',()=>{
   const base={parentOrigin:'https://tanstack.com',previewOrigin:'https://sandbox-preview.example'}
   const buildId='build-"quoted"'

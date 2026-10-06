@@ -75,8 +75,12 @@ test('native API declarations work outside the source tree without ambient types
   assert.ok(contract.exports['.'].includes('AgentSession'))
   assert.equal(contract.exports['.'].includes('WorkerKernel'),false)
   const consumer=join(root,'consumer.ts')
-  writeFileSync(consumer,`import {AgentSession,NativeAgentBackend,NativeOwnerClient,SDK_COMPATIBILITY} from './types/sdk/native.js';
+  writeFileSync(consumer,`import {AgentSession,NativeAgentBackend,NativeOwnerClient,installNativeOwnerHost,PackageDownloadPolicy,SDK_COMPATIBILITY} from './types/sdk/native.js';
 declare const owner: NativeOwnerClient;
+const policy: PackageDownloadPolicy = {additionalOrigins: ['https://packages.example'] as const};
+installNativeOwnerHost({allowedParentOrigin: 'https://app.example', workerURL: '/runtime/native/engine.js', packageDownloadPolicy: policy});
+// @ts-expect-error Projects cannot change the owner host's download policy.
+owner.start({}, {packageDownloadPolicy: policy});
 const agent = new AgentSession(new NativeAgentBackend(owner), {maxOutputBytes: 1024});
 agent.read({path: '/app/package.json'});
 agent.snapshot({encoding: 'binary'});

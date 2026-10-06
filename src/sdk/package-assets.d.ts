@@ -45,6 +45,8 @@ export declare function createNativeOwnerHostAssets(options: {
   sdkPath?: string
   workerPath?: string
   assetBaseURL?: string
+  /** Extra exact HTTPS origins for locked archives. Registry-only when omitted. */
+  packageDownloadPolicy?: {additionalOrigins?: readonly string[]}
 }): {
   files: Record<string, string>
   headers: Record<string, Record<string, string>>

@@ -20,18 +20,9 @@ export async function prepareOxide(packageRoots:string[]):Promise<void>{
   }
   if(!packages.length||binding)return
   const assetURL=new URL('./oxide/oxide.mjs',import.meta.url).href
-  // The browser WASI binding chooses its worker protocol when evaluated.
-  // The guest's Node version is a compatibility shim, not this worker's host.
-  const versions=(globalThis as typeof globalThis&{process?:{versions?:Record<string,string|undefined>}}).process?.versions as Record<string,string|undefined>|undefined
-  const nodeVersion=versions?.node
-  try{
-    if(versions)versions.node=undefined
-    const module=await import(assetURL) as {default:Record<string,unknown>;disposeBrowserOxideWorkers:()=>void}
-    binding=module.default
-    disposeWorkers=module.disposeBrowserOxideWorkers
-  }finally{
-    if(versions&&nodeVersion!==undefined)versions.node=nodeVersion
-  }
+  const module=await import(assetURL) as {default:Record<string,unknown>;disposeBrowserOxideWorkers:()=>void}
+  binding=module.default
+  disposeWorkers=module.disposeBrowserOxideWorkers
 }
 
 export function disposeOxideWorkers(){

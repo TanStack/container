@@ -43,6 +43,9 @@ const ownerAssets = createNativeOwnerHostAssets({
   previewHostSuffix: process.env.NATIVE_PREVIEW_HOST_SUFFIX,
   workerPath: runtimeCandidates[0].workerURL,
   runtimeCandidates,
+  packageDownloadPolicy: process.env.NATIVE_PACKAGE_DOWNLOAD_ORIGINS_JSON === undefined
+    ? undefined
+    : { additionalOrigins: JSON.parse(process.env.NATIVE_PACKAGE_DOWNLOAD_ORIGINS_JSON) },
 })
 
 const headers = {

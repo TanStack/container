@@ -51,3 +51,34 @@ test('preserves an async function used to obtain its constructor',async()=>{
   const module=await import(`data:text/javascript,${encodeURIComponent(result!.code)}`)
   expect(await module.evaluate('return await Promise.resolve(42)')).toBe(42)
 })
+
+test('still lowers async children inside synchronous functions and generators',async()=>{
+  const source=`
+    export function ordinaryParent() {
+      return async function child() { return await Promise.resolve(3) }
+    }
+    export function* generatorParent() {
+      yield async () => await Promise.resolve(4)
+    }
+  `
+  const result=await transformNativeAsyncContext(source,'/app/nested.js')
+  expect(result?.code).toContain('_asyncToGenerator')
+  expect(result?.code).not.toMatch(/async (?:function|\()/)
+  const module=await import(`data:text/javascript,${encodeURIComponent(result!.code)}`)
+  expect(await module.ordinaryParent()()).toBe(3)
+  expect(await module.generatorParent().next().value()).toBe(4)
+})
+
+test('keeps an async generator native but lowers its ordinary async child',async()=>{
+  const source=`
+    export async function* parent() {
+      const child = async () => await Promise.resolve(5)
+      yield await child()
+    }
+  `
+  const result=await transformNativeAsyncContext(source,'/app/nested-iterator.js')
+  expect(result?.code).toMatch(/async function\*\s*parent\(\)/)
+  expect(result?.code).toContain('_asyncToGenerator')
+  const module=await import(`data:text/javascript,${encodeURIComponent(result!.code)}`)
+  expect(await module.parent().next()).toEqual({value:5,done:false})
+})
